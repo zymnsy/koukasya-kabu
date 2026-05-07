@@ -1,0 +1,13 @@
+{
+  "name": "koukasya-kabu",
+  "version": "0.1.0",
+  "private": true,
+  "description": "光菓舎-Kabu / 日本株 統合分析ダッシュボード",
+  "scripts": {
+    "dev": "wrangler pages dev . --port 8788",
+    "deploy": "wrangler pages deploy ."
+  },
+  "devDependencies": {
+    "wrangler": "^3.78.0"
+  }
+}

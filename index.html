@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>光菓舎-Kabu｜日本株 統合分析</title>
+<meta name="description" content="株探・スカウター・TradingView・四季報のいいとこ取り。1画面で銘柄検索・チャート・割安判定・スクリーナー・ウォッチリストまで。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E📈%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="./css/style.css">
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body data-theme="dark">
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">📈</span>
+    <h1>光菓舎-Kabu</h1>
+    <span class="tag" id="market-tag">JPX</span>
+  </div>
+  <div class="search-wrap">
+    <input type="search" id="search" placeholder="銘柄コード or 社名（例: 7203 / トヨタ）" autocomplete="off">
+    <ul id="suggest" class="suggest hidden"></ul>
+  </div>
+  <div class="topbar-actions">
+    <button class="btn-icon" id="theme-toggle" title="テーマ切替">🌗</button>
+    <button class="btn-icon" id="refresh-now" title="今すぐ更新">↻</button>
+    <span class="updated-at" id="updated-at">--:--:--</span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- LEFT: WATCHLIST -->
+  <aside class="watchlist">
+    <div class="watch-head">
+      <h2>⭐ ウォッチ</h2>
+      <button id="watch-add" class="btn-mini" title="現在の銘柄を追加">＋追加</button>
+    </div>
+    <ul id="watchlist" class="watch-list"></ul>
+
+    <div class="watch-head" style="margin-top:1.2rem">
+      <h2>🔥 人気</h2>
+    </div>
+    <div id="popular-groups"></div>
+  </aside>
+
+  <!-- CENTER: DASHBOARD -->
+  <section class="dashboard">
+
+    <!-- header card -->
+    <div class="stock-head card">
+      <div class="stock-head-main">
+        <div class="symbol-line">
+          <span class="ticker" id="t-symbol">----</span>
+          <span class="name" id="t-name">銘柄を選択してください</span>
+          <span class="exch" id="t-exch"></span>
+        </div>
+        <div class="price-line">
+          <span class="price" id="t-price">--</span>
+          <span class="change" id="t-change">--</span>
+          <span class="change-pct" id="t-changepct">--</span>
+        </div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi"><label>始値</label><span id="t-open">--</span></div>
+        <div class="kpi"><label>高値</label><span id="t-high">--</span></div>
+        <div class="kpi"><label>安値</label><span id="t-low">--</span></div>
+        <div class="kpi"><label>出来高</label><span id="t-volume">--</span></div>
+        <div class="kpi"><label>時価総額</label><span id="t-mktcap">--</span></div>
+        <div class="kpi"><label>PER</label><span id="t-per">--</span></div>
+        <div class="kpi"><label>PBR</label><span id="t-pbr">--</span></div>
+        <div class="kpi"><label>配当利回り</label><span id="t-yield">--</span></div>
+      </div>
+    </div>
+
+    <!-- chart card -->
+    <div class="chart-card card">
+      <div class="chart-tabs">
+        <div class="range-tabs">
+          <button class="range-btn" data-range="5d" data-interval="15m">5日</button>
+          <button class="range-btn active" data-range="1mo" data-interval="1d">1ヶ月</button>
+          <button class="range-btn" data-range="6mo" data-interval="1d">6ヶ月</button>
+          <button class="range-btn" data-range="1y" data-interval="1d">1年</button>
+          <button class="range-btn" data-range="5y" data-interval="1wk">5年</button>
+          <button class="range-btn" data-range="max" data-interval="1mo">全</button>
+        </div>
+        <div class="chart-type-tabs">
+          <button class="ctype-btn active" data-ctype="candle">ローソク</button>
+          <button class="ctype-btn" data-ctype="line">ライン</button>
+          <button class="ctype-btn" data-ctype="area">エリア</button>
+        </div>
+      </div>
+      <div id="chart" class="chart-area"></div>
+    </div>
+
+    <!-- valuation card -->
+    <div class="valuation card">
+      <h3>🎯 割安/割高 ひと目スコア</h3>
+      <div class="score-grid">
+        <div class="score-cell">
+          <div class="score-label">PER評価</div>
+          <div class="score-bar"><div class="score-fill" id="score-per"></div></div>
+          <div class="score-detail" id="score-per-text">--</div>
+        </div>
+        <div class="score-cell">
+          <div class="score-label">PBR評価</div>
+          <div class="score-bar"><div class="score-fill" id="score-pbr"></div></div>
+          <div class="score-detail" id="score-pbr-text">--</div>
+        </div>
+        <div class="score-cell">
+          <div class="score-label">配当利回り</div>
+          <div class="score-bar"><div class="score-fill" id="score-yield"></div></div>
+          <div class="score-detail" id="score-yield-text">--</div>
+        </div>
+        <div class="score-cell">
+          <div class="score-label">ROE</div>
+          <div class="score-bar"><div class="score-fill" id="score-roe"></div></div>
+          <div class="score-detail" id="score-roe-text">--</div>
+        </div>
+      </div>
+      <div class="verdict" id="verdict">--</div>
+    </div>
+
+    <!-- earnings card -->
+    <div class="earnings card">
+      <h3>📊 業績推移（年次）</h3>
+      <div class="earnings-toolbar">
+        <button class="earn-tab active" data-metric="revenue">売上</button>
+        <button class="earn-tab" data-metric="profit">純利益</button>
+        <button class="earn-tab" data-metric="eps">EPS</button>
+      </div>
+      <div id="earnings-bars" class="bars"></div>
+    </div>
+
+    <!-- profile -->
+    <div class="profile card">
+      <h3>🏢 企業プロフィール</h3>
+      <dl class="profile-list">
+        <dt>業種</dt><dd id="p-sector">--</dd>
+        <dt>従業員数</dt><dd id="p-employees">--</dd>
+        <dt>本社</dt><dd id="p-address">--</dd>
+        <dt>事業内容</dt><dd id="p-summary" class="summary">--</dd>
+      </dl>
+    </div>
+
+  </section>
+
+  <!-- RIGHT: SCREENER -->
+  <aside class="screener">
+    <h2>🔬 スクリーナー</h2>
+    <div class="screen-form">
+      <label>母集団
+        <select id="sc-group">
+          <option value="日経225主力">日経225主力</option>
+          <option value="高配当">高配当</option>
+          <option value="グロース・半導体">グロース・半導体</option>
+          <option value="ディフェンシブ">ディフェンシブ</option>
+          <option value="個人投資家人気">個人投資家人気</option>
+        </select>
+      </label>
+      <div class="row2">
+        <label>PER ≦ <input type="number" id="sc-per" placeholder="例: 15" step="0.1"></label>
+        <label>PBR ≦ <input type="number" id="sc-pbr" placeholder="例: 1.5" step="0.1"></label>
+      </div>
+      <div class="row2">
+        <label>配当% ≧ <input type="number" id="sc-yield" placeholder="例: 3" step="0.1"></label>
+        <label>時価総額(億)≧ <input type="number" id="sc-mcap" placeholder="例: 1000"></label>
+      </div>
+      <button id="sc-run" class="btn-primary">スクリーニング実行</button>
+    </div>
+    <div id="sc-result" class="sc-result"></div>
+  </aside>
+
+</main>
+
+<footer class="footer">
+  <small>データ: Yahoo Finance（参考値・15分遅延の可能性） · 投資判断はご自身の責任で · <a href="https://koukasya-hub.pages.dev" target="_blank" rel="noopener">光菓舎ToolBox</a></small>
+</footer>
+
+<script src="./js/app.js" type="module"></script>
+</body>
+</html>

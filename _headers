@@ -1,0 +1,7 @@
+/api/*
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=15, stale-while-revalidate=60
+
+/*
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
