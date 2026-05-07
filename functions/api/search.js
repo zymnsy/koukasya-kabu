@@ -6,6 +6,9 @@ export async function onRequest(context) {
   const q = url.searchParams.get("q");
   if (!q) return json({ error: "q required" }, 400);
 
+  // Yahoo searchは日本語クエリで400を返すので、CJKが含まれていたら空返し（クライアント側で別経路）
+  if (/[　-鿿＀-￯]/.test(q)) return json({ items: [], _hint: "use_local_search" }, 200, 60);
+
   const target = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&lang=ja-JP&region=JP&quotesCount=15&newsCount=0`;
   const res = await fetch(target, {
     headers: {

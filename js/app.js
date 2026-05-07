@@ -25,7 +25,13 @@ const state = {
   earnMetric: "revenue",
   summary: null,
   quote: null,
-  indicators: { sma5:true, sma25:true, sma75:false, sma200:false, bb:false, vol:true, rsi:false, macd:false },
+  indicators: { sma5:true, sma25:true, sma75:false, sma200:false, ichimoku:false, bb:false, vwap:false, vol:true, rsi:false, macd:false, stoch:false, atr:false },
+  symbolMaster: [],
+  compareSymbols: [],   // 重ね描き用追加銘柄
+  compareSeries: {},    // {symbol: lineSeries}
+  compareCandles: {},   // {symbol: candles}
+  stochChart: null,
+  atrChart: null,
 };
 
 // ========== INIT ==========
@@ -42,6 +48,7 @@ async function init() {
   });
 
   state.popular = await fetch("./data/popular.json").then(r => r.json());
+  state.symbolMaster = await fetch("./data/symbols.json").then(r => r.json()).catch(() => []);
   renderPopular();
   renderWatchlist();
 
@@ -116,8 +123,16 @@ function setupSearch() {
     const q = input.value.trim();
     if (!q) { list.classList.add("hidden"); return; }
     searchTimer = setTimeout(async () => {
-      const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => ({ items: [] }));
-      items = r.items || [];
+      const isJP = /[ぁ-んァ-ヶー一-龠]/.test(q);
+      const local = localSearch(q);
+      let api = [];
+      if (!isJP) {
+        const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => ({ items: [] }));
+        api = r.items || [];
+      }
+      // 重複排除（local優先）
+      const seen = new Set(local.map(i => i.symbol));
+      items = [...local, ...api.filter(i => !seen.has(i.symbol))];
       if (/^\d{4}$/.test(q) && !items.some(i => i.symbol === `${q}.T`)) {
         items.unshift({ symbol: `${q}.T`, shortname: `銘柄コード ${q}`, exch: "Tokyo" });
       }
@@ -165,6 +180,7 @@ function selectSymbol(symbol) {
   localStorage.setItem("kabu_last_symbol", symbol);
   loadAll();
   startAutoRefresh();
+  loadNote();
 }
 
 async function loadAll() {
@@ -315,6 +331,9 @@ async function loadChart() {
     state.candles = data.candles;
     renderChart();
     renderIndicators();
+    // 比較銘柄も同レンジで再取得
+    state.compareCandles = {};
+    for (const s of state.compareSymbols) loadCompareSymbol(s);
   } catch (e) { console.error("loadChart", e); }
 }
 
@@ -474,6 +493,9 @@ function renderIndicators() {
     macdEl.classList.add("hidden");
     if (state.macdChart) { state.macdChart.remove(); state.macdChart = null; state.series.macdMacd = state.series.macdSig = state.series.macdHist = null; }
   }
+
+  // 拡張指標（一目・VWAP・ストキャス・ATR・比較銘柄）
+  renderExtraIndicators();
 }
 
 // ========== TECHNICAL INDICATORS ==========
@@ -568,6 +590,8 @@ async function loadSummary() {
     renderAnalyst();
     renderProfile();
     renderFScore();
+    renderUpgrades();
+    renderHolders();
   } catch (e) { console.error("loadSummary", e); }
 }
 
@@ -578,15 +602,15 @@ function renderEarnings() {
 
   const m = state.earnMetric;
   let label, getter;
-  if (m === "revenue") { label="売上"; getter = (e,_,__) => e.totalRevenue?.raw; }
-  else if (m === "opIncome") { label="営業利益"; getter = (e,_,__) => e.operatingIncome?.raw ?? e.ebit?.raw; }
-  else if (m === "netIncome") { label="純利益"; getter = (e,_,__) => e.netIncome?.raw; }
-  else if (m === "eps") { label="EPS"; getter = (_,bs,__) => null; /* incomeにはEPS無し、後で個別 */ }
-  else if (m === "opcf") { label="営業CF"; getter = (_,_,cf) => cf?.totalCashFromOperatingActivities?.raw; }
-  else if (m === "fcf") { label="FCF"; getter = (_,_,cf) => {
+  if (m === "revenue") { label="売上"; getter = (e) => e.totalRevenue?.raw; }
+  else if (m === "opIncome") { label="営業利益"; getter = (e) => e.operatingIncome?.raw ?? e.ebit?.raw; }
+  else if (m === "netIncome") { label="純利益"; getter = (e) => e.netIncome?.raw; }
+  else if (m === "eps") { label="EPS"; getter = () => null; /* 個別経路 */ }
+  else if (m === "opcf") { label="営業CF"; getter = (_e, _b, cf) => cf?.totalCashFromOperatingActivities?.raw; }
+  else if (m === "fcf") { label="FCF"; getter = (_e, _b, cf) => {
       const op = cf?.totalCashFromOperatingActivities?.raw;
       const cap = cf?.capitalExpenditures?.raw;
-      return (op != null && cap != null) ? op + cap : null; // capExは負値
+      return (op != null && cap != null) ? op + cap : null;
     };
   }
 
@@ -1007,3 +1031,444 @@ function fmtAuto(v) {
   if (Math.abs(v) >= 1e4) return (v/1e4).toFixed(0)+"万";
   return v.toLocaleString("ja-JP");
 }
+
+// ========== LOCAL SYMBOL SEARCH ==========
+function localSearch(q) {
+  if (!state.symbolMaster?.length) return [];
+  const lq = q.toLowerCase();
+  return state.symbolMaster
+    .filter(it => it.c.startsWith(q) || it.n.includes(q) || it.n.toLowerCase().includes(lq) || (it.s||"").includes(q))
+    .slice(0, 12)
+    .map(it => ({ symbol: `${it.c}.T`, shortname: it.n, longname: it.n, exch: it.s || "東証" }));
+}
+
+// ========== COMPARE (multi-symbol overlay) ==========
+function setupCompare() {
+  $("#add-compare").addEventListener("click", () => {
+    const v = prompt("比較する銘柄コード（4桁）または .T 付シンボル");
+    if (!v) return;
+    const sym = /^\d{4}$/.test(v.trim()) ? `${v.trim()}.T` : v.trim();
+    if (sym === state.symbol || state.compareSymbols.includes(sym)) return;
+    if (state.compareSymbols.length >= 4) { toast("比較は最大4銘柄まで", "error"); return; }
+    state.compareSymbols.push(sym);
+    saveCompare();
+    loadCompareSymbol(sym);
+    renderCompareList();
+  });
+}
+function saveCompare() { localStorage.setItem("kabu_compare", JSON.stringify(state.compareSymbols)); }
+function loadCompareFromStorage() {
+  try { state.compareSymbols = JSON.parse(localStorage.getItem("kabu_compare") || "[]"); }
+  catch { state.compareSymbols = []; }
+}
+async function loadCompareSymbol(sym) {
+  try {
+    const url = `/api/chart?symbol=${encodeURIComponent(sym)}&interval=${state.interval}&range=${state.range}`;
+    const data = await fetch(url).then(r => r.json());
+    if (!data.candles) return;
+    state.compareCandles[sym] = data.candles;
+    renderCompareSeries(sym);
+  } catch (e) { console.error(e); }
+}
+function renderCompareList() {
+  const el = $("#compare-list");
+  el.innerHTML = state.compareSymbols.map(s => `
+    <span class="compare-chip" data-symbol="${s}" style="border-color:${compareColor(s)}">
+      ${s.replace(".T","")}
+      <button class="x" data-rm="${s}">×</button>
+    </span>`).join("");
+  el.querySelectorAll(".x").forEach(b => b.addEventListener("click", e => {
+    const sym = b.dataset.rm;
+    state.compareSymbols = state.compareSymbols.filter(s => s !== sym);
+    saveCompare();
+    if (state.compareSeries[sym] && state.chart) {
+      state.chart.removeSeries(state.compareSeries[sym]);
+      delete state.compareSeries[sym];
+    }
+    delete state.compareCandles[sym];
+    renderCompareList();
+    e.stopPropagation();
+  }));
+}
+function compareColor(sym) {
+  const palette = ["#ff8c5c","#a78bfa","#ffc857","#7cc7ff","#ff5c7a"];
+  let h = 0; for (const c of sym) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return palette[h % palette.length];
+}
+function renderCompareSeries(sym) {
+  if (!state.chart || !state.compareCandles[sym]) return;
+  const candles = state.compareCandles[sym];
+  if (state.compareSeries[sym]) state.chart.removeSeries(state.compareSeries[sym]);
+  // 主銘柄の最初の終値を100に正規化して比較しやすくする
+  const mainBase = state.candles[0]?.c;
+  const subBase = candles[0]?.c;
+  const useNormalize = mainBase && subBase;
+  const series = state.chart.addLineSeries({
+    color: compareColor(sym), lineWidth: 1.4, priceLineVisible: false, lastValueVisible: true, priceScaleId: useNormalize ? "compare" : "right",
+  });
+  if (useNormalize) {
+    state.chart.priceScale("compare").applyOptions({ visible: false });
+    series.setData(candles.map(c => ({ time: c.t, value: (c.c / subBase) * mainBase })));
+  } else {
+    series.setData(candles.map(c => ({ time: c.t, value: c.c })));
+  }
+  state.compareSeries[sym] = series;
+}
+
+// ========== ICHIMOKU 一目均衡表 ==========
+function ichimoku(highs, lows, closes) {
+  const n = closes.length;
+  const tenkan = new Array(n).fill(null);   // 転換線 (9)
+  const kijun = new Array(n).fill(null);    // 基準線 (26)
+  const spanA = new Array(n).fill(null);    // 先行スパンA
+  const spanB = new Array(n).fill(null);    // 先行スパンB (52)
+  const chikou = new Array(n).fill(null);   // 遅行スパン
+  const range = (arr, i, p) => {
+    if (i < p - 1) return [null, null];
+    let mx = -Infinity, mn = Infinity;
+    for (let j = i - p + 1; j <= i; j++) { mx = Math.max(mx, arr[j]); mn = Math.min(mn, arr[j]); }
+    return [mx, mn];
+  };
+  for (let i = 0; i < n; i++) {
+    const [h9, l9] = (() => { const [hi,lo] = [highs,lows].map(a=>range(a,i,9)); return [hi[0],lo[1]]; })();
+    if (h9 != null && l9 != null) tenkan[i] = (h9 + l9) / 2;
+    const h26 = range(highs, i, 26)[0]; const l26 = range(lows, i, 26)[1];
+    if (h26 != null && l26 != null) kijun[i] = (h26 + l26) / 2;
+    if (tenkan[i] != null && kijun[i] != null) spanA[i] = (tenkan[i] + kijun[i]) / 2;
+    const h52 = range(highs, i, 52)[0]; const l52 = range(lows, i, 52)[1];
+    if (h52 != null && l52 != null) spanB[i] = (h52 + l52) / 2;
+    if (i + 26 < n) chikou[i + 26] = closes[i]; // ※視覚的には遅行=現在価格を26期前にプロット、ここでは未来側へずらす近似
+  }
+  return { tenkan, kijun, spanA, spanB, chikou };
+}
+
+// ========== ATR ==========
+function ATR(highs, lows, closes, p=14) {
+  const n = closes.length;
+  const tr = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    if (i === 0) { tr[i] = highs[i] - lows[i]; continue; }
+    tr[i] = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i-1]), Math.abs(lows[i] - closes[i-1]));
+  }
+  const out = new Array(n).fill(null);
+  let prev = null;
+  for (let i = 0; i < n; i++) {
+    if (i < p - 1) continue;
+    if (prev == null) { let s = 0; for (let j = 0; j < p; j++) s += tr[j]; prev = s / p; }
+    else prev = (prev * (p - 1) + tr[i]) / p;
+    out[i] = prev;
+  }
+  return out;
+}
+
+// ========== Stochastic ==========
+function Stochastic(highs, lows, closes, kP=14, dP=3) {
+  const n = closes.length;
+  const k = new Array(n).fill(null);
+  for (let i = kP - 1; i < n; i++) {
+    let mx = -Infinity, mn = Infinity;
+    for (let j = i - kP + 1; j <= i; j++) { mx = Math.max(mx, highs[j]); mn = Math.min(mn, lows[j]); }
+    k[i] = mx === mn ? 50 : ((closes[i] - mn) / (mx - mn)) * 100;
+  }
+  const d = SMA(k, dP);
+  return { k, d };
+}
+
+// ========== VWAP ==========
+function VWAP(candles) {
+  let cumPV = 0, cumV = 0;
+  return candles.map(c => {
+    const tp = (c.h + c.l + c.c) / 3;
+    cumPV += tp * (c.v || 0);
+    cumV += (c.v || 0);
+    return cumV ? cumPV / cumV : null;
+  });
+}
+
+function renderExtraIndicators() {
+  if (!state.chart || !state.candles.length) return;
+  const c = chartColors();
+  const highs = state.candles.map(d => d.h);
+  const lows = state.candles.map(d => d.l);
+  const closes = state.candles.map(d => d.c);
+
+  ["ichTen","ichKij","ichA","ichB"].forEach(k => { if (state.series[k]) { state.chart.removeSeries(state.series[k]); state.series[k]=null; }});
+  if (state.indicators.ichimoku) {
+    const ic = ichimoku(highs, lows, closes);
+    state.series.ichTen = state.chart.addLineSeries({ color: "#ff5c7a", lineWidth: 1, priceLineVisible:false, lastValueVisible:false });
+    state.series.ichKij = state.chart.addLineSeries({ color: "#7cc7ff", lineWidth: 1, priceLineVisible:false, lastValueVisible:false });
+    state.series.ichA = state.chart.addLineSeries({ color: "rgba(46,204,113,.7)", lineWidth: 1, priceLineVisible:false, lastValueVisible:false });
+    state.series.ichB = state.chart.addLineSeries({ color: "rgba(255,92,122,.6)", lineWidth: 1, priceLineVisible:false, lastValueVisible:false });
+    state.series.ichTen.setData(state.candles.map((d,i)=>({time:d.t,value:ic.tenkan[i]})).filter(d=>d.value!=null));
+    state.series.ichKij.setData(state.candles.map((d,i)=>({time:d.t,value:ic.kijun[i]})).filter(d=>d.value!=null));
+    state.series.ichA.setData(state.candles.map((d,i)=>({time:d.t,value:ic.spanA[i]})).filter(d=>d.value!=null));
+    state.series.ichB.setData(state.candles.map((d,i)=>({time:d.t,value:ic.spanB[i]})).filter(d=>d.value!=null));
+  }
+
+  if (state.series.vwap) { state.chart.removeSeries(state.series.vwap); state.series.vwap = null; }
+  if (state.indicators.vwap) {
+    const v = VWAP(state.candles);
+    state.series.vwap = state.chart.addLineSeries({ color: c.line3, lineWidth: 1.5, lineStyle: 2, priceLineVisible:false, lastValueVisible:false });
+    state.series.vwap.setData(state.candles.map((d,i)=>({time:d.t,value:v[i]})).filter(d=>d.value!=null));
+  }
+
+  const sEl = $("#chart-stoch");
+  if (state.indicators.stoch) {
+    sEl.classList.remove("hidden");
+    if (!state.stochChart) {
+      state.stochChart = LightweightCharts.createChart(sEl, {
+        width: sEl.clientWidth, height: sEl.clientHeight,
+        layout: { background: { color: c.bg }, textColor: c.text, fontSize: 10 },
+        grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
+        timeScale: { borderColor: c.grid, visible: false },
+        rightPriceScale: { borderColor: c.grid },
+        crosshair: { mode: 1 },
+      });
+      state.stochChart._kabuEl = sEl;
+    }
+    ["stochK","stochD"].forEach(k => { if (state.series[k]) { state.stochChart.removeSeries(state.series[k]); state.series[k]=null; }});
+    const st = Stochastic(highs, lows, closes, 14, 3);
+    state.series.stochK = state.stochChart.addLineSeries({ color: c.line1, lineWidth: 1.5 });
+    state.series.stochD = state.stochChart.addLineSeries({ color: c.line2, lineWidth: 1.5 });
+    state.series.stochK.setData(state.candles.map((d,i)=>({time:d.t,value:st.k[i]})).filter(d=>d.value!=null));
+    state.series.stochD.setData(state.candles.map((d,i)=>({time:d.t,value:st.d[i]})).filter(d=>d.value!=null));
+    state.series.stochK.createPriceLine({ price: 80, color: c.dn, lineWidth: 1, lineStyle: 2, axisLabelVisible: true });
+    state.series.stochK.createPriceLine({ price: 20, color: c.up, lineWidth: 1, lineStyle: 2, axisLabelVisible: true });
+    state.stochChart.timeScale().fitContent();
+  } else {
+    sEl.classList.add("hidden");
+    if (state.stochChart) { state.stochChart.remove(); state.stochChart = null; state.series.stochK = state.series.stochD = null; }
+  }
+
+  const aEl = $("#chart-atr");
+  if (state.indicators.atr) {
+    aEl.classList.remove("hidden");
+    if (!state.atrChart) {
+      state.atrChart = LightweightCharts.createChart(aEl, {
+        width: aEl.clientWidth, height: aEl.clientHeight,
+        layout: { background: { color: c.bg }, textColor: c.text, fontSize: 10 },
+        grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
+        timeScale: { borderColor: c.grid, visible: false },
+        rightPriceScale: { borderColor: c.grid },
+        crosshair: { mode: 1 },
+      });
+      state.atrChart._kabuEl = aEl;
+    }
+    if (state.series.atr) { state.atrChart.removeSeries(state.series.atr); state.series.atr = null; }
+    const a = ATR(highs, lows, closes, 14);
+    state.series.atr = state.atrChart.addLineSeries({ color: c.line4, lineWidth: 1.5 });
+    state.series.atr.setData(state.candles.map((d,i)=>({time:d.t,value:a[i]})).filter(d=>d.value!=null));
+    state.atrChart.timeScale().fitContent();
+  } else {
+    aEl.classList.add("hidden");
+    if (state.atrChart) { state.atrChart.remove(); state.atrChart = null; state.series.atr = null; }
+  }
+
+  // 比較銘柄シリーズ復元
+  state.compareSymbols.forEach(s => {
+    if (state.compareCandles[s]) renderCompareSeries(s);
+  });
+}
+
+// ========== ANALYST UPGRADE HISTORY ==========
+function renderUpgrades() {
+  const el = $("#upgrade-list");
+  const ud = state.summary?.upgradeDowngradeHistory?.history || [];
+  if (!ud.length) { el.innerHTML = '<div class="sc-empty">履歴データなし</div>'; return; }
+  const top = ud.slice(0, 8);
+  const actMap = {
+    up: { cls: "act-up", text: "↑格上げ" },
+    down: { cls: "act-down", text: "↓格下げ" },
+    init: { cls: "act-init", text: "★新規" },
+    main: { cls: "act-maint", text: "維持" },
+    reit: { cls: "act-maint", text: "再表明" },
+  };
+  el.innerHTML = top.map(h => {
+    const date = h.epochGradeDate ? new Date(h.epochGradeDate * 1000).toLocaleDateString("ja-JP", {year:'2-digit',month:'2-digit',day:'2-digit'}) : "--";
+    const a = actMap[h.action] || { cls: "act-maint", text: h.action || "--" };
+    const grade = h.fromGrade && h.fromGrade !== h.toGrade ? `${h.fromGrade}→${h.toGrade}` : h.toGrade;
+    return `<div class="up-item">
+      <span class="up-date">${date}</span>
+      <span class="up-firm"><strong>${h.firm||"--"}</strong> ${grade||""}</span>
+      <span class="up-action ${a.cls}">${a.text}</span>
+    </div>`;
+  }).join("");
+}
+
+// ========== HOLDERS ==========
+function renderHolders() {
+  const el = $("#holders-list");
+  const m = state.summary?.majorHoldersBreakdown;
+  if (!m) { el.innerHTML = '<div class="sc-empty">データなし</div>'; return; }
+  const rows = [
+    { label: "インサイダー保有", val: m.insidersPercentHeld?.raw },
+    { label: "機関投資家保有", val: m.institutionsPercentHeld?.raw },
+    { label: "上位機関比率", val: m.institutionsFloatPercentHeld?.raw },
+  ].filter(r => r.val != null);
+  if (!rows.length) { el.innerHTML = '<div class="sc-empty">データなし</div>'; return; }
+  el.innerHTML = rows.map(r => `
+    <div class="holder-bar">
+      <span class="holder-name">${r.label}</span>
+      <span class="holder-pct">${fmt(r.val*100,2)}%</span>
+      <div class="holder-bar-bg"><div class="holder-bar-fg" style="width:${Math.min(100, r.val*100)}%"></div></div>
+    </div>`).join("");
+}
+
+// ========== NOTE ==========
+function loadNote() {
+  if (!state.symbol) return;
+  const key = `kabu_note_${state.symbol}`;
+  const text = localStorage.getItem(key) || "";
+  $("#note").value = text;
+  const updKey = `${key}_upd`;
+  const upd = localStorage.getItem(updKey);
+  $("#note-meta").textContent = upd ? `更新: ${upd}` : "未保存";
+}
+function setupNote() {
+  let saveTimer = null;
+  $("#note").addEventListener("input", () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      if (!state.symbol) return;
+      const key = `kabu_note_${state.symbol}`;
+      localStorage.setItem(key, $("#note").value);
+      const now = new Date().toLocaleString("ja-JP");
+      localStorage.setItem(`${key}_upd`, now);
+      $("#note-meta").textContent = `自動保存: ${now}`;
+    }, 500);
+  });
+}
+
+// ========== AI SUMMARY ==========
+function setupAI() {
+  $("#ai-run").addEventListener("click", async () => {
+    if (!state.symbol || !state.quote) return;
+    const btn = $("#ai-run");
+    const out = $("#ai-result");
+    btn.disabled = true;
+    out.innerHTML = '<div class="ai-loading"><span class="loading"></span>Geminiで要約生成中…</div>';
+
+    const ctx = buildAIContext();
+    try {
+      const r = await fetch("/api/ai-summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: state.symbol, context: ctx }),
+      }).then(r => r.json());
+      out.textContent = r.text || "(空応答)";
+    } catch (e) {
+      out.textContent = "エラーが発生しました: " + e;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+function buildAIContext() {
+  const q = state.quote || {};
+  const sd = state.summary?.summaryDetail || {};
+  const fd = state.summary?.financialData || {};
+  const fs = computeFScore();
+  const fsScore = fs.filter(f=>f.pass===true).length;
+  const fsValid = fs.filter(f=>f.pass!=null).length;
+  return [
+    `銘柄名: ${q.longName||q.shortName||q.symbol}`,
+    `業種: ${state.summary?.assetProfile?.industryDisp||"--"}`,
+    `現在値: ${q.regularMarketPrice} 円 (前日比 ${q.regularMarketChangePercent?.toFixed?.(2)}%)`,
+    `時価総額: ${fmtCap(q.marketCap)}`,
+    `PER: ${q.trailingPE?.toFixed?.(2)} / PBR: ${q.priceToBook?.toFixed?.(2)} / 配当利回り: ${(q.trailingAnnualDividendYield||0)*100}%`,
+    `EPS: ${q.epsTrailingTwelveMonths} / BPS: ${q.bookValue}`,
+    `ROE: ${(fd.returnOnEquity?.raw*100)?.toFixed?.(2)||'--'}% / ROA: ${(fd.returnOnAssets?.raw*100)?.toFixed?.(2)||'--'}%`,
+    `配当性向: ${(sd.payoutRatio?.raw*100)?.toFixed?.(1)||'--'}%`,
+    `アナリスト目標株価: ${fd.targetMeanPrice?.raw}円 / カバー${fd.numberOfAnalystOpinions?.raw||0}名`,
+    `ピオトロスキーF-Score: ${fsScore}/${fsValid}`,
+    `52週高値: ${q.fiftyTwoWeekHigh} / 安値: ${q.fiftyTwoWeekLow}`,
+  ].join("\n");
+}
+
+// ========== CSV EXPORT ==========
+function exportCSV() {
+  if (!state.candles.length) { toast("データがありません","error"); return; }
+  const rows = [["date","open","high","low","close","volume"]];
+  state.candles.forEach(c => {
+    const d = new Date(c.t * 1000);
+    rows.push([d.toISOString().slice(0,10), c.o, c.h, c.l, c.c, c.v||""]);
+  });
+  const csv = rows.map(r => r.join(",")).join("\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `${state.symbol}_${state.range}_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+  toast("CSV出力しました", "success");
+}
+
+// ========== TOAST ==========
+function toast(msg, kind = "") {
+  const el = document.createElement("div");
+  el.className = `toast toast-${kind} toast-fade`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2500);
+}
+
+// ========== KEYBOARD ==========
+function setupKeyboard() {
+  document.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+    if (e.key === "/" || e.key === "?") { e.preventDefault(); $("#search").focus(); return; }
+    if (e.key === "Escape") {
+      $("#kbd-modal").classList.add("hidden");
+      $("#suggest").classList.add("hidden");
+      return;
+    }
+    if (e.key === "w") { $("#watch-add").click(); return; }
+    if (e.key === "r") { if (state.symbol) loadAll(); return; }
+    if (e.key === "t") { $("#theme-toggle").click(); return; }
+    if (e.key === "p") { window.print(); return; }
+    if (e.key === "e") { exportCSV(); return; }
+    if (e.key === "j" || e.key === "k") {
+      const list = state.watchlist;
+      if (!list.length) return;
+      const idx = list.findIndex(w => w.symbol === state.symbol);
+      const next = e.key === "j" ? Math.min(list.length-1, idx+1) : Math.max(0, idx-1);
+      if (next !== idx && list[next]) selectSymbol(list[next].symbol);
+      return;
+    }
+    if (/^[1-6]$/.test(e.key)) {
+      const btn = $$(".range-btn")[parseInt(e.key)-1];
+      if (btn) btn.click();
+      return;
+    }
+  });
+}
+
+// ========== UI WIRE-UP for new buttons ==========
+(function() {
+  // 後付けで一度だけ実行されるよう、initロード後に呼ばれるためinit末尾で都度ガード
+})();
+
+document.addEventListener("DOMContentLoaded", () => {
+  // setup hooks（init後でも呼べる）
+  setTimeout(() => {
+    setupCompare();
+    setupAI();
+    setupNote();
+    setupKeyboard();
+    loadCompareFromStorage();
+    state.compareSymbols.forEach(s => loadCompareSymbol(s));
+    renderCompareList();
+
+    $("#export-csv")?.addEventListener("click", exportCSV);
+    $("#print-page")?.addEventListener("click", () => window.print());
+    $("#kbd-help")?.addEventListener("click", () => $("#kbd-modal").classList.remove("hidden"));
+    $("#kbd-modal")?.addEventListener("click", (e) => {
+      if (e.target.id === "kbd-modal") $("#kbd-modal").classList.add("hidden");
+    });
+  }, 100);
+});
+
+// (override pattern回避：renderIndicators / loadSummary / selectSymbol / loadChart はそれぞれ
+//  本体で renderExtraIndicators / renderUpgrades / renderHolders / loadNote / loadCompareSymbol を直接呼ぶ)
+

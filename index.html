@@ -23,11 +23,31 @@
     <ul id="suggest" class="suggest hidden"></ul>
   </div>
   <div class="topbar-actions">
+    <button class="btn-icon" id="export-csv" title="CSV出力">📥</button>
+    <button class="btn-icon" id="print-page" title="印刷（A4最適化）">🖨</button>
+    <button class="btn-icon" id="kbd-help" title="ショートカット (?)">⌨</button>
     <button class="btn-icon" id="theme-toggle" title="テーマ切替">🌗</button>
     <button class="btn-icon" id="refresh-now" title="今すぐ更新">↻</button>
     <span class="updated-at" id="updated-at">--:--:--</span>
   </div>
 </header>
+
+<div id="kbd-modal" class="modal hidden">
+  <div class="modal-body">
+    <h3>キーボードショートカット</h3>
+    <table class="kbd-table">
+      <tr><td><kbd>/</kbd></td><td>銘柄検索</td></tr>
+      <tr><td><kbd>w</kbd></td><td>現在の銘柄をウォッチに追加</td></tr>
+      <tr><td><kbd>r</kbd></td><td>今すぐ更新</td></tr>
+      <tr><td><kbd>t</kbd></td><td>テーマ切替（ダーク/ライト）</td></tr>
+      <tr><td><kbd>p</kbd></td><td>印刷</td></tr>
+      <tr><td><kbd>e</kbd></td><td>CSVエクスポート</td></tr>
+      <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>ウォッチ内で前/次の銘柄</td></tr>
+      <tr><td><kbd>1〜6</kbd></td><td>チャート期間切替</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>閉じる</td></tr>
+    </table>
+  </div>
+</div>
 
 <main class="layout">
 
@@ -100,19 +120,31 @@
         </div>
       </div>
       <div class="indicator-row">
-        <span class="ind-label">指標:</span>
+        <span class="ind-label">トレンド:</span>
         <label><input type="checkbox" class="ind-toggle" data-ind="sma5" checked> SMA5</label>
         <label><input type="checkbox" class="ind-toggle" data-ind="sma25" checked> SMA25</label>
         <label><input type="checkbox" class="ind-toggle" data-ind="sma75"> SMA75</label>
         <label><input type="checkbox" class="ind-toggle" data-ind="sma200"> SMA200</label>
+        <label><input type="checkbox" class="ind-toggle" data-ind="ichimoku"> 一目均衡表</label>
         <label><input type="checkbox" class="ind-toggle" data-ind="bb"> ボリンジャー</label>
+        <label><input type="checkbox" class="ind-toggle" data-ind="vwap"> VWAP</label>
+      </div>
+      <div class="indicator-row">
+        <span class="ind-label">オシレータ:</span>
         <label><input type="checkbox" class="ind-toggle" data-ind="vol" checked> 出来高</label>
         <label><input type="checkbox" class="ind-toggle" data-ind="rsi"> RSI(14)</label>
         <label><input type="checkbox" class="ind-toggle" data-ind="macd"> MACD</label>
+        <label><input type="checkbox" class="ind-toggle" data-ind="stoch"> ストキャス</label>
+        <label><input type="checkbox" class="ind-toggle" data-ind="atr"> ATR</label>
+        <span class="ind-label" style="margin-left:auto">比較:</span>
+        <button id="add-compare" class="btn-mini">＋銘柄追加</button>
+        <span id="compare-list" class="compare-list"></span>
       </div>
       <div id="chart" class="chart-area"></div>
       <div id="chart-rsi" class="chart-sub hidden"></div>
       <div id="chart-macd" class="chart-sub hidden"></div>
+      <div id="chart-stoch" class="chart-sub hidden"></div>
+      <div id="chart-atr" class="chart-sub hidden"></div>
     </div>
 
     <!-- valuation card -->
@@ -236,6 +268,32 @@
           </thead>
           <tbody></tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- upgrade history + holders -->
+    <div class="two-col">
+      <div class="card">
+        <h3>📋 アナリスト格付け 直近履歴</h3>
+        <div id="upgrade-list" class="upgrade-list"></div>
+      </div>
+      <div class="card">
+        <h3>👥 大株主構成</h3>
+        <div id="holders-list" class="holders-list"></div>
+      </div>
+    </div>
+
+    <!-- AI summary + Note -->
+    <div class="two-col">
+      <div class="card">
+        <h3>🤖 AI総合要約</h3>
+        <button id="ai-run" class="btn-primary" style="width:100%">この銘柄を要約する（Gemini）</button>
+        <div id="ai-result" class="ai-result"></div>
+      </div>
+      <div class="card">
+        <h3>📝 自分用メモ</h3>
+        <textarea id="note" class="note-area" placeholder="この銘柄について自分のメモを残せます（自動保存・銘柄ごと管理）"></textarea>
+        <div class="note-meta" id="note-meta"></div>
       </div>
     </div>
 

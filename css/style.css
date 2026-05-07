@@ -395,6 +395,97 @@ h1{font-size:1.05rem;margin:0;letter-spacing:.04em}
 .peers-table tr:hover:not(.self){background:var(--card-2);cursor:pointer}
 .peers-table .ticker-cell{color:var(--primary);font-weight:600}
 
+/* === Modal (kbd help) === */
+.modal{
+  position:fixed;inset:0;background:rgba(0,0,0,.55);
+  display:flex;align-items:center;justify-content:center;z-index:200;
+  backdrop-filter:blur(4px);
+}
+.modal-body{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+  padding:1.4rem 1.6rem;max-width:520px;width:90%;
+  box-shadow:var(--shadow);
+}
+.modal-body h3{margin:0 0 1rem 0}
+.kbd-table{width:100%;border-collapse:collapse}
+.kbd-table td{padding:.4rem .55rem;border-bottom:1px solid var(--line);font-size:.85rem}
+.kbd-table td:first-child{width:120px;text-align:right}
+kbd{
+  background:var(--card-2);border:1px solid var(--line);border-bottom-width:2px;
+  padding:.1rem .45rem;border-radius:4px;font-family:'Consolas','SF Mono',monospace;
+  font-size:.8rem;color:var(--primary);
+}
+
+/* === Compare list === */
+.compare-list{display:inline-flex;flex-wrap:wrap;gap:.3rem}
+.compare-chip{
+  display:inline-flex;align-items:center;gap:.2rem;
+  background:var(--card-2);border:1px solid var(--line);border-radius:99px;
+  padding:.1rem .5rem .1rem .55rem;font-size:.72rem;
+}
+.compare-chip .x{color:var(--muted);cursor:pointer;background:none;border:none;font-size:.85rem;padding:0 0 0 .15rem}
+.compare-chip .x:hover{color:var(--red)}
+
+/* === Upgrade list === */
+.upgrade-list{display:flex;flex-direction:column;gap:.3rem;max-height:240px;overflow:auto}
+.up-item{
+  display:grid;grid-template-columns:80px 1fr auto;gap:.4rem;align-items:center;
+  padding:.35rem .55rem;background:var(--card-2);border-radius:6px;font-size:.78rem;
+}
+.up-date{color:var(--muted);font-variant-numeric:tabular-nums}
+.up-firm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.up-action{font-weight:700;font-size:.72rem;padding:.1rem .35rem;border-radius:3px}
+.act-up{background:var(--green);color:#0a1226}
+.act-down{background:var(--red);color:#fff}
+.act-init{background:var(--primary);color:#0a1226}
+.act-maint{background:var(--card);color:var(--muted);border:1px solid var(--line)}
+
+/* === Holders list === */
+.holders-list{display:flex;flex-direction:column;gap:.4rem}
+.holder-bar{
+  display:grid;grid-template-columns:1fr auto;gap:.5rem;align-items:center;
+  font-size:.78rem;
+}
+.holder-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.holder-pct{font-variant-numeric:tabular-nums;color:var(--primary);font-weight:600}
+.holder-bar-bg{
+  grid-column:1/-1;height:6px;background:var(--bg);border-radius:99px;overflow:hidden;
+}
+.holder-bar-fg{height:100%;background:linear-gradient(90deg,var(--primary),var(--primary-2));border-radius:99px}
+
+/* === AI summary === */
+.ai-result{
+  margin-top:.7rem;padding:.7rem .85rem;background:var(--card-2);border-radius:8px;
+  font-size:.85rem;line-height:1.7;min-height:60px;color:var(--text);white-space:pre-wrap;
+}
+.ai-result:empty::before{content:"ボタンを押すとAIが現状を要約します";color:var(--muted)}
+.ai-loading{display:flex;align-items:center;gap:.5rem;color:var(--muted)}
+
+/* === Note === */
+.note-area{
+  width:100%;min-height:120px;
+  background:var(--card-2);color:var(--text);border:1px solid var(--line);border-radius:8px;
+  padding:.7rem .85rem;font-family:inherit;font-size:.85rem;line-height:1.6;resize:vertical;
+}
+.note-area:focus{outline:2px solid var(--primary);border-color:transparent}
+.note-meta{margin-top:.4rem;font-size:.7rem;color:var(--muted)}
+
+/* === Loading toast === */
+.toast{
+  position:fixed;bottom:1.5rem;left:50%;transform:translateX(-50%);
+  background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:.55rem 1rem;font-size:.85rem;box-shadow:var(--shadow);z-index:300;
+  display:flex;align-items:center;gap:.5rem;
+}
+.toast.toast-error{border-color:var(--red);color:var(--red)}
+.toast.toast-success{border-color:var(--green);color:var(--green)}
+.toast-fade{animation:toastFade 2.5s forwards}
+@keyframes toastFade{
+  0%{opacity:0;transform:translate(-50%,10px)}
+  10%,80%{opacity:1;transform:translate(-50%,0)}
+  100%{opacity:0;transform:translate(-50%,-6px)}
+}
+
 /* === Print === */
 @media print{
   .topbar,.watchlist,.screener,.footer{display:none}
