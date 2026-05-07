@@ -298,6 +298,103 @@ h1{font-size:1.05rem;margin:0;letter-spacing:.04em}
 }
 @keyframes spin{to{transform:rotate(360deg)}}
 
+/* === Indicator toggles === */
+.indicator-row{
+  display:flex;flex-wrap:wrap;gap:.7rem;align-items:center;
+  padding:.45rem .5rem;font-size:.78rem;color:var(--muted);
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  margin:.4rem 0;
+}
+.indicator-row .ind-label{font-weight:600;color:var(--text)}
+.indicator-row label{display:flex;align-items:center;gap:.25rem;cursor:pointer;color:var(--text)}
+.indicator-row input[type="checkbox"]{accent-color:var(--primary)}
+.chart-sub{height:120px;width:100%;margin-top:.4rem;border-top:1px solid var(--line)}
+
+/* === Two col === */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+@media (max-width:900px){ .two-col{grid-template-columns:1fr} }
+
+/* === Earnings meta === */
+.earn-meta{
+  margin-top:.6rem;padding:.5rem .7rem;
+  background:var(--card-2);border-radius:6px;
+  font-size:.8rem;color:var(--muted);
+}
+.earn-meta strong{color:var(--text)}
+.earn-meta .pos{color:var(--green)}
+.earn-meta .neg{color:var(--red)}
+
+/* === Dividend === */
+.div-grid,.anal-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+  gap:.5rem;
+}
+.div-cell,.anal-cell{
+  background:var(--card-2);padding:.5rem .65rem;border-radius:8px;
+}
+.div-cell label,.anal-cell label{
+  display:block;color:var(--muted);font-size:.7rem;margin-bottom:.18rem;
+}
+.div-cell span,.anal-cell span{
+  font-size:.95rem;font-weight:600;font-variant-numeric:tabular-nums;
+}
+
+/* === Recommendation bar === */
+.reco-bar{
+  display:flex;height:18px;border-radius:8px;overflow:hidden;
+  margin-top:.7rem;background:var(--card-2);font-size:.7rem;font-weight:700;color:#0a1226;
+}
+.reco-seg{display:flex;align-items:center;justify-content:center;min-width:0}
+.reco-strongbuy{background:#1aa055}
+.reco-buy{background:#7cc7ff}
+.reco-hold{background:#ffc857}
+.reco-sell{background:#ff8c5c}
+.reco-strongsell{background:#ff5c7a}
+.next-event{margin-top:.5rem;color:var(--muted);font-size:.78rem}
+
+/* === F-Score === */
+.fscore-list{display:flex;flex-direction:column;gap:.3rem}
+.fs-item{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:.35rem .55rem;background:var(--card-2);border-radius:6px;
+  font-size:.8rem;
+}
+.fs-pass{color:var(--green);font-weight:700}
+.fs-fail{color:var(--red);font-weight:700}
+.fs-na{color:var(--muted)}
+.fscore-total{
+  margin-top:.7rem;padding:.6rem .8rem;
+  background:linear-gradient(90deg,var(--card-2),var(--bg));
+  border-radius:8px;font-weight:700;font-size:.95rem;text-align:center;
+}
+
+/* === Simulator === */
+.sim-form{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.6rem}
+.sim-form label{display:flex;flex-direction:column;gap:.2rem;font-size:.75rem;color:var(--muted)}
+.sim-form input{
+  background:var(--card-2);color:var(--text);border:1px solid var(--line);
+  border-radius:6px;padding:.4rem .55rem;font-size:.9rem;
+}
+.sim-result{
+  padding:.7rem .85rem;background:var(--card-2);border-radius:8px;
+  font-size:.85rem;line-height:1.7;
+}
+.sim-result .big{font-size:1.2rem;font-weight:700;display:block;margin:.2rem 0}
+
+/* === Peers table === */
+.peers-table-wrap{overflow-x:auto}
+.peers-table{
+  width:100%;border-collapse:collapse;font-size:.82rem;font-variant-numeric:tabular-nums;
+}
+.peers-table th,.peers-table td{
+  padding:.45rem .55rem;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;
+}
+.peers-table th:first-child,.peers-table td:first-child{text-align:left}
+.peers-table th{color:var(--muted);font-weight:500;font-size:.72rem}
+.peers-table tr.self{background:var(--card-2);font-weight:600}
+.peers-table tr:hover:not(.self){background:var(--card-2);cursor:pointer}
+.peers-table .ticker-cell{color:var(--primary);font-weight:600}
+
 /* === Print === */
 @media print{
   .topbar,.watchlist,.screener,.footer{display:none}

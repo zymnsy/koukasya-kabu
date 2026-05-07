@@ -1,6 +1,5 @@
-// 光菓舎-Kabu / メインアプリ
-// 1画面ダッシュボード：検索→チャート→KPI→割安スコア→業績→ウォッチ→スクリーナー
-// データ：Cloudflare Pages Functions経由でYahoo Finance、15秒ポーリング
+// 光菓舎-Kabu / 高精度版
+// テクニカル6指標・10年ファンダ・配当・アナリスト・F-Score・損益シミュ・他社比較
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -8,23 +7,31 @@ const $$ = (sel) => document.querySelectorAll(sel);
 // ========== STATE ==========
 const state = {
   symbol: null,
-  range: "1mo",
+  range: "3mo",
   interval: "1d",
   ctype: "candle",
   chart: null,
-  series: null,
+  rsiChart: null,
+  macdChart: null,
+  series: { main:null, sma5:null, sma25:null, sma75:null, sma200:null, bbU:null, bbM:null, bbL:null, vol:null, rsi:null, macdMacd:null, macdSig:null, macdHist:null },
+  candles: [],
   refreshTimer: null,
   watchlist: loadWatchlist(),
   popular: null,
-  earnings: null,
+  earningsAnnual: null,
+  cfAnnual: null,
+  bsAnnual: null,
+  earningsTrend: null,
   earnMetric: "revenue",
+  summary: null,
+  quote: null,
+  indicators: { sma5:true, sma25:true, sma75:false, sma200:false, bb:false, vol:true, rsi:false, macd:false },
 };
 
 // ========== INIT ==========
 init().catch(err => console.error("init error", err));
 
 async function init() {
-  // theme
   const theme = localStorage.getItem("kabu_theme") || "dark";
   document.body.dataset.theme = theme;
   $("#theme-toggle").addEventListener("click", () => {
@@ -34,15 +41,12 @@ async function init() {
     if (state.chart) recreateChart();
   });
 
-  // popular
   state.popular = await fetch("./data/popular.json").then(r => r.json());
   renderPopular();
   renderWatchlist();
 
-  // search
   setupSearch();
 
-  // range tabs
   $$(".range-btn").forEach(btn => btn.addEventListener("click", () => {
     $$(".range-btn").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
@@ -51,7 +55,6 @@ async function init() {
     if (state.symbol) loadChart();
   }));
 
-  // chart type tabs
   $$(".ctype-btn").forEach(btn => btn.addEventListener("click", () => {
     $$(".ctype-btn").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
@@ -59,7 +62,11 @@ async function init() {
     if (state.symbol) recreateChart();
   }));
 
-  // earnings tabs
+  $$(".ind-toggle").forEach(cb => cb.addEventListener("change", () => {
+    state.indicators[cb.dataset.ind] = cb.checked;
+    if (state.symbol) renderIndicators();
+  }));
+
   $$(".earn-tab").forEach(btn => btn.addEventListener("click", () => {
     $$(".earn-tab").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
@@ -67,33 +74,29 @@ async function init() {
     renderEarnings();
   }));
 
-  // refresh now
-  $("#refresh-now").addEventListener("click", () => {
-    if (state.symbol) loadAll();
-  });
+  $("#refresh-now").addEventListener("click", () => { if (state.symbol) loadAll(); });
 
-  // add to watch
   $("#watch-add").addEventListener("click", () => {
     if (!state.symbol) return;
     addToWatchlist(state.symbol, $("#t-name").textContent);
   });
 
-  // screener
   $("#sc-run").addEventListener("click", runScreener);
 
-  // initial: load Toyota or last viewed
+  $("#sim-price").addEventListener("input", renderSimulator);
+  $("#sim-shares").addEventListener("input", renderSimulator);
+
   const last = localStorage.getItem("kabu_last_symbol") || "7203.T";
   selectSymbol(last);
 
-  // resize
   window.addEventListener("resize", () => {
-    if (state.chart) {
-      const el = $("#chart");
-      state.chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
-    }
+    [state.chart, state.rsiChart, state.macdChart].forEach(c => {
+      if (c) {
+        const el = c._kabuEl; if (el) c.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+      }
+    });
   });
 
-  // visibility (止める)
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stopAutoRefresh();
     else if (state.symbol) startAutoRefresh();
@@ -115,7 +118,6 @@ function setupSearch() {
     searchTimer = setTimeout(async () => {
       const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => ({ items: [] }));
       items = r.items || [];
-      // 数字のみなら .T 直接候補も追加
       if (/^\d{4}$/.test(q) && !items.some(i => i.symbol === `${q}.T`)) {
         items.unshift({ symbol: `${q}.T`, shortname: `銘柄コード ${q}`, exch: "Tokyo" });
       }
@@ -166,7 +168,7 @@ function selectSymbol(symbol) {
 }
 
 async function loadAll() {
-  await Promise.all([loadQuote(), loadChart(), loadSummary()]);
+  await Promise.all([loadQuote(), loadChart(), loadSummary(), loadPeers()]);
   $("#updated-at").textContent = new Date().toLocaleTimeString("ja-JP", { hour12: false });
 }
 
@@ -185,8 +187,10 @@ async function loadQuote() {
     const r = await fetch(`/api/quote?symbols=${encodeURIComponent(state.symbol)}`).then(r => r.json());
     const q = r?.quoteResponse?.result?.[0];
     if (!q) return;
+    state.quote = q;
     renderQuote(q);
     renderValuation(q);
+    renderSimulator();
     refreshWatchlistRow(state.symbol, q);
   } catch (e) { console.error("loadQuote", e); }
 }
@@ -197,7 +201,7 @@ function renderQuote(q) {
   $("#t-exch").textContent = q.fullExchangeName || q.exchange || "";
   $("#market-tag").textContent = q.exchange || "JPX";
 
-  const price = q.regularMarketPrice ?? q.postMarketPrice ?? null;
+  const price = q.regularMarketPrice ?? null;
   const chg = q.regularMarketChange ?? 0;
   const chgPct = q.regularMarketChangePercent ?? 0;
   $("#t-price").textContent = fmt(price, 2);
@@ -214,43 +218,72 @@ function renderQuote(q) {
   $("#t-mktcap").textContent = fmtCap(q.marketCap);
   $("#t-per").textContent = fmt(q.trailingPE, 2);
   $("#t-pbr").textContent = fmt(q.priceToBook, 2);
-  $("#t-yield").textContent = q.trailingAnnualDividendYield != null ? `${fmt(q.trailingAnnualDividendYield * 100, 2)}%` : (q.dividendYield != null ? `${fmt(q.dividendYield, 2)}%` : "--");
+  $("#t-yield").textContent = pct(q.trailingAnnualDividendYield ?? (q.dividendYield != null ? q.dividendYield/100 : null));
+  $("#t-eps").textContent = fmt(q.epsTrailingTwelveMonths, 2);
+  $("#t-bps").textContent = fmt(q.bookValue, 2);
+  $("#t-52h").textContent = fmt(q.fiftyTwoWeekHigh, 2);
+  $("#t-52l").textContent = fmt(q.fiftyTwoWeekLow, 2);
 }
 
 // ========== VALUATION ==========
 function renderValuation(q) {
-  // PER: 低い=割安 / 0-30レンジで反転
   const per = q.trailingPE;
-  const perScore = scoreInverted(per, 5, 30);
-  setScore("per", perScore, per != null ? `${fmt(per,2)}倍` : "--");
+  setScore("per", scoreInverted(per, 5, 30), per != null ? `${fmt(per,2)}倍` : "--");
 
-  // PBR: 低い=割安 / 0.3-3レンジで反転
   const pbr = q.priceToBook;
-  const pbrScore = scoreInverted(pbr, 0.5, 3);
-  setScore("pbr", pbrScore, pbr != null ? `${fmt(pbr,2)}倍` : "--");
+  setScore("pbr", scoreInverted(pbr, 0.5, 3), pbr != null ? `${fmt(pbr,2)}倍` : "--");
 
-  // 配当: 高い=良い / 0-6%
   const yld = q.trailingAnnualDividendYield != null ? q.trailingAnnualDividendYield * 100 : (q.dividendYield ?? null);
-  const yldScore = scoreLinear(yld, 0, 6);
-  setScore("yield", yldScore, yld != null ? `${fmt(yld,2)}%` : "--");
+  setScore("yield", scoreLinear(yld, 0, 6), yld != null ? `${fmt(yld,2)}%` : "--");
 
-  // ROE はsummaryから後で上書き
-  if (state.summaryROE != null) {
-    const roeScore = scoreLinear(state.summaryROE, 0, 20);
-    setScore("roe", roeScore, `${fmt(state.summaryROE,2)}%`);
-  }
+  const roe = state.summary?.financialData?.returnOnEquity?.raw;
+  if (roe != null) {
+    const roePct = roe * 100;
+    setScore("roe", scoreLinear(roePct, 0, 20), `${fmt(roePct,2)}%`);
+    $("#t-roe").textContent = `${fmt(roePct,2)}%`;
+  } else setScore("roe", null, "--");
 
-  // 総合判定
-  const scores = [perScore, pbrScore, yldScore].filter(s => s != null);
+  const roa = state.summary?.financialData?.returnOnAssets?.raw;
+  $("#t-roa").textContent = roa != null ? `${fmt(roa*100,2)}%` : "--";
+
+  // 自己資本比率（最新BSから）
+  const eqRatio = computeEquityRatio();
+  $("#t-equity").textContent = eqRatio != null ? `${fmt(eqRatio,1)}%` : "--";
+
+  // EV/EBITDA
+  const evEbitda = state.summary?.defaultKeyStatistics?.enterpriseToEbitda?.raw;
+  $("#t-evebitda").textContent = fmt(evEbitda, 2);
+
+  // PEG（PER ÷ 利益成長率）— earningsTrendの+1y成長率を使う
+  const peg = state.summary?.defaultKeyStatistics?.pegRatio?.raw;
+  setScore("peg", scoreInverted(peg, 0.5, 3), peg != null ? `${fmt(peg,2)}` : "--");
+
+  // グレアム指数 = PER × PBR  （22.5以下が割安目安）
+  let graham = null;
+  if (per != null && pbr != null) graham = per * pbr;
+  setScore("graham", scoreInverted(graham, 5, 60), graham != null ? `${fmt(graham,1)}（22.5以下が目安）` : "--");
+
+  const scores = ["per","pbr","yield","roe","peg","graham"]
+    .map(k => parseInt(($(`#score-${k}`).style.width || "0").replace("%","")) || null)
+    .filter(s => s !== null && s > 0);
   const avg = scores.length ? scores.reduce((a,b)=>a+b,0)/scores.length : null;
   let verdict = "判定不可";
   if (avg != null) {
-    if (avg >= 70) verdict = "🟢 割安寄り：バリュー候補";
-    else if (avg >= 50) verdict = "🟡 中立：他指標と組み合わせ要";
-    else if (avg >= 30) verdict = "🟠 やや割高：成長性で説明できるか確認";
-    else verdict = "🔴 割高水準：成長性or期待先行に注意";
+    if (avg >= 70) verdict = `🟢 総合${Math.round(avg)}点：割安寄り（バリュー候補）`;
+    else if (avg >= 55) verdict = `🟡 総合${Math.round(avg)}点：中立（他指標と組合せ要）`;
+    else if (avg >= 35) verdict = `🟠 総合${Math.round(avg)}点：やや割高（成長性で説明できるか）`;
+    else verdict = `🔴 総合${Math.round(avg)}点：割高水準（期待先行に注意）`;
   }
   $("#verdict").textContent = verdict;
+}
+
+function computeEquityRatio() {
+  const bs = state.summary?.balanceSheetHistory?.balanceSheetStatements?.[0];
+  if (!bs) return null;
+  const equity = bs.totalStockholderEquity?.raw;
+  const assets = bs.totalAssets?.raw;
+  if (!equity || !assets) return null;
+  return (equity / assets) * 100;
 }
 
 function scoreInverted(val, lo, hi) {
@@ -266,9 +299,10 @@ function scoreLinear(val, lo, hi) {
 function setScore(key, score, text) {
   const fill = $(`#score-${key}`);
   const t = $(`#score-${key}-text`);
+  if (!fill) return;
   if (score == null) { fill.style.width = "0%"; t.textContent = text; return; }
   fill.style.width = `${score}%`;
-  t.textContent = `${text}（スコア ${score}）`;
+  t.textContent = `${text}（${score}点）`;
 }
 
 // ========== CHART ==========
@@ -278,111 +312,311 @@ async function loadChart() {
     const url = `/api/chart?symbol=${encodeURIComponent(state.symbol)}&interval=${state.interval}&range=${state.range}`;
     const data = await fetch(url).then(r => r.json());
     if (!data.candles) return;
-    renderChart(data.candles);
+    state.candles = data.candles;
+    renderChart();
+    renderIndicators();
   } catch (e) { console.error("loadChart", e); }
 }
 
 function recreateChart() {
   if (state.chart) { state.chart.remove(); state.chart = null; }
-  if (state.symbol) loadChart();
+  if (state.rsiChart) { state.rsiChart.remove(); state.rsiChart = null; }
+  if (state.macdChart) { state.macdChart.remove(); state.macdChart = null; }
+  for (const k in state.series) state.series[k] = null;
+  if (state.symbol) { renderChart(); renderIndicators(); }
 }
 
-function renderChart(candles) {
-  const el = $("#chart");
+function chartColors() {
   const dark = document.body.dataset.theme === "dark";
-  const colors = dark
-    ? { bg:"#18223b", text:"#e7ecf5", grid:"#2b3658", up:"#2ecc71", dn:"#ff5c7a" }
-    : { bg:"#ffffff", text:"#1a2342", grid:"#d8dfee", up:"#1aa055", dn:"#d63a59" };
+  return dark
+    ? { bg:"#18223b", text:"#e7ecf5", grid:"#2b3658", up:"#2ecc71", dn:"#ff5c7a", line1:"#7cc7ff", line2:"#ffc857", line3:"#a78bfa", line4:"#ff8c5c", bb:"rgba(124,199,255,.4)" }
+    : { bg:"#ffffff", text:"#1a2342", grid:"#d8dfee", up:"#1aa055", dn:"#d63a59", line1:"#1d72c4", line2:"#c89515", line3:"#7c4dff", line4:"#d6633a", bb:"rgba(29,114,196,.4)" };
+}
+
+function renderChart() {
+  if (!state.candles.length) return;
+  const el = $("#chart");
+  const c = chartColors();
 
   if (!state.chart) {
     state.chart = LightweightCharts.createChart(el, {
-      width: el.clientWidth,
-      height: el.clientHeight,
-      layout: { background: { color: colors.bg }, textColor: colors.text, fontSize: 11 },
-      grid: { vertLines: { color: colors.grid }, horzLines: { color: colors.grid } },
-      timeScale: { borderColor: colors.grid, timeVisible: state.interval.includes("m") || state.interval.includes("h") },
-      rightPriceScale: { borderColor: colors.grid },
+      width: el.clientWidth, height: el.clientHeight,
+      layout: { background: { color: c.bg }, textColor: c.text, fontSize: 11 },
+      grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
+      timeScale: { borderColor: c.grid, timeVisible: state.interval.includes("m") || state.interval.includes("h") },
+      rightPriceScale: { borderColor: c.grid, scaleMargins: { top: .08, bottom: .25 } },
       crosshair: { mode: 1 },
       localization: { locale: "ja-JP" },
     });
-  } else {
-    state.chart.applyOptions({
-      layout: { background: { color: colors.bg }, textColor: colors.text },
-      grid: { vertLines: { color: colors.grid }, horzLines: { color: colors.grid } },
-    });
-    if (state.series) state.chart.removeSeries(state.series);
+    state.chart._kabuEl = el;
   }
-
+  // メインシリーズ
+  if (state.series.main) state.chart.removeSeries(state.series.main);
   if (state.ctype === "candle") {
-    state.series = state.chart.addCandlestickSeries({
-      upColor: colors.up, downColor: colors.dn,
-      borderUpColor: colors.up, borderDownColor: colors.dn,
-      wickUpColor: colors.up, wickDownColor: colors.dn,
+    state.series.main = state.chart.addCandlestickSeries({
+      upColor: c.up, downColor: c.dn, borderUpColor: c.up, borderDownColor: c.dn,
+      wickUpColor: c.up, wickDownColor: c.dn,
     });
-    state.series.setData(candles.map(c => ({
-      time: c.t, open: c.o, high: c.h, low: c.l, close: c.c,
-    })));
+    state.series.main.setData(state.candles.map(c1 => ({ time: c1.t, open: c1.o, high: c1.h, low: c1.l, close: c1.c })));
   } else if (state.ctype === "line") {
-    state.series = state.chart.addLineSeries({ color: colors.up, lineWidth: 2 });
-    state.series.setData(candles.map(c => ({ time: c.t, value: c.c })));
+    state.series.main = state.chart.addLineSeries({ color: c.up, lineWidth: 2 });
+    state.series.main.setData(state.candles.map(c1 => ({ time: c1.t, value: c1.c })));
   } else {
-    state.series = state.chart.addAreaSeries({
-      lineColor: colors.up,
-      topColor: dark ? "rgba(46,204,113,.4)" : "rgba(26,160,85,.3)",
-      bottomColor: dark ? "rgba(46,204,113,.0)" : "rgba(26,160,85,.0)",
-      lineWidth: 2,
+    state.series.main = state.chart.addAreaSeries({
+      lineColor: c.up,
+      topColor: document.body.dataset.theme === "dark" ? "rgba(46,204,113,.4)" : "rgba(26,160,85,.3)",
+      bottomColor: "rgba(46,204,113,.0)", lineWidth: 2,
     });
-    state.series.setData(candles.map(c => ({ time: c.t, value: c.c })));
+    state.series.main.setData(state.candles.map(c1 => ({ time: c1.t, value: c1.c })));
   }
-
   state.chart.timeScale().fitContent();
 }
 
-// ========== SUMMARY (財務) ==========
+function renderIndicators() {
+  if (!state.chart || !state.candles.length) return;
+  const c = chartColors();
+  const closes = state.candles.map(d => d.c);
+
+  // SMA
+  for (const p of [5,25,75,200]) {
+    const key = `sma${p}`;
+    if (state.series[key]) { state.chart.removeSeries(state.series[key]); state.series[key] = null; }
+    if (state.indicators[key]) {
+      const sma = SMA(closes, p);
+      const colorMap = { sma5:c.line1, sma25:c.line2, sma75:c.line3, sma200:c.line4 };
+      state.series[key] = state.chart.addLineSeries({ color: colorMap[key], lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+      state.series[key].setData(state.candles.map((d,i) => ({ time: d.t, value: sma[i] })).filter(d => d.value != null));
+    }
+  }
+
+  // ボリンジャー
+  ["bbU","bbM","bbL"].forEach(k => { if (state.series[k]) { state.chart.removeSeries(state.series[k]); state.series[k]=null; }});
+  if (state.indicators.bb) {
+    const { upper, middle, lower } = BollingerBands(closes, 20, 2);
+    state.series.bbU = state.chart.addLineSeries({ color: c.bb, lineWidth: 1, priceLineVisible:false, lastValueVisible:false });
+    state.series.bbM = state.chart.addLineSeries({ color: c.bb, lineWidth: 1, lineStyle: 2, priceLineVisible:false, lastValueVisible:false });
+    state.series.bbL = state.chart.addLineSeries({ color: c.bb, lineWidth: 1, priceLineVisible:false, lastValueVisible:false });
+    state.series.bbU.setData(state.candles.map((d,i) => ({ time: d.t, value: upper[i] })).filter(d => d.value != null));
+    state.series.bbM.setData(state.candles.map((d,i) => ({ time: d.t, value: middle[i] })).filter(d => d.value != null));
+    state.series.bbL.setData(state.candles.map((d,i) => ({ time: d.t, value: lower[i] })).filter(d => d.value != null));
+  }
+
+  // 出来高
+  if (state.series.vol) { state.chart.removeSeries(state.series.vol); state.series.vol = null; }
+  if (state.indicators.vol) {
+    state.series.vol = state.chart.addHistogramSeries({
+      priceFormat: { type: "volume" },
+      priceScaleId: "vol",
+      color: c.line1,
+    });
+    state.chart.priceScale("vol").applyOptions({ scaleMargins: { top: .8, bottom: 0 } });
+    state.series.vol.setData(state.candles.map(d => ({
+      time: d.t, value: d.v || 0,
+      color: (d.c >= d.o) ? `${c.up}88` : `${c.dn}88`,
+    })));
+  }
+
+  // RSI（サブパネル）
+  const rsiEl = $("#chart-rsi");
+  if (state.indicators.rsi) {
+    rsiEl.classList.remove("hidden");
+    if (!state.rsiChart) {
+      state.rsiChart = LightweightCharts.createChart(rsiEl, {
+        width: rsiEl.clientWidth, height: rsiEl.clientHeight,
+        layout: { background: { color: c.bg }, textColor: c.text, fontSize: 10 },
+        grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
+        timeScale: { borderColor: c.grid, visible: false },
+        rightPriceScale: { borderColor: c.grid },
+        crosshair: { mode: 1 },
+      });
+      state.rsiChart._kabuEl = rsiEl;
+    }
+    if (state.series.rsi) state.rsiChart.removeSeries(state.series.rsi);
+    state.series.rsi = state.rsiChart.addLineSeries({ color: c.line2, lineWidth: 1.5 });
+    const rsi = RSI(closes, 14);
+    state.series.rsi.setData(state.candles.map((d,i) => ({ time: d.t, value: rsi[i] })).filter(d => d.value != null));
+    state.series.rsi.createPriceLine({ price: 70, color: c.dn, lineWidth: 1, lineStyle: 2, axisLabelVisible: true });
+    state.series.rsi.createPriceLine({ price: 30, color: c.up, lineWidth: 1, lineStyle: 2, axisLabelVisible: true });
+    state.rsiChart.timeScale().fitContent();
+  } else {
+    rsiEl.classList.add("hidden");
+    if (state.rsiChart) { state.rsiChart.remove(); state.rsiChart = null; state.series.rsi = null; }
+  }
+
+  // MACD（サブパネル）
+  const macdEl = $("#chart-macd");
+  if (state.indicators.macd) {
+    macdEl.classList.remove("hidden");
+    if (!state.macdChart) {
+      state.macdChart = LightweightCharts.createChart(macdEl, {
+        width: macdEl.clientWidth, height: macdEl.clientHeight,
+        layout: { background: { color: c.bg }, textColor: c.text, fontSize: 10 },
+        grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
+        timeScale: { borderColor: c.grid, visible: false },
+        rightPriceScale: { borderColor: c.grid },
+        crosshair: { mode: 1 },
+      });
+      state.macdChart._kabuEl = macdEl;
+    }
+    ["macdMacd","macdSig","macdHist"].forEach(k => { if (state.series[k]) { state.macdChart.removeSeries(state.series[k]); state.series[k]=null; }});
+    const { macd, signal, hist } = MACD(closes, 12, 26, 9);
+    state.series.macdHist = state.macdChart.addHistogramSeries({ color: c.line1 });
+    state.series.macdHist.setData(state.candles.map((d,i) => ({
+      time: d.t, value: hist[i],
+      color: hist[i] >= 0 ? `${c.up}aa` : `${c.dn}aa`,
+    })).filter(d => d.value != null));
+    state.series.macdMacd = state.macdChart.addLineSeries({ color: c.line1, lineWidth: 1.5 });
+    state.series.macdSig = state.macdChart.addLineSeries({ color: c.line2, lineWidth: 1.5 });
+    state.series.macdMacd.setData(state.candles.map((d,i) => ({ time: d.t, value: macd[i] })).filter(d => d.value != null));
+    state.series.macdSig.setData(state.candles.map((d,i) => ({ time: d.t, value: signal[i] })).filter(d => d.value != null));
+    state.macdChart.timeScale().fitContent();
+  } else {
+    macdEl.classList.add("hidden");
+    if (state.macdChart) { state.macdChart.remove(); state.macdChart = null; state.series.macdMacd = state.series.macdSig = state.series.macdHist = null; }
+  }
+}
+
+// ========== TECHNICAL INDICATORS ==========
+function SMA(arr, p) {
+  const out = new Array(arr.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < arr.length; i++) {
+    sum += arr[i];
+    if (i >= p) sum -= arr[i - p];
+    if (i >= p - 1) out[i] = sum / p;
+  }
+  return out;
+}
+function EMA(arr, p) {
+  const out = new Array(arr.length).fill(null);
+  const k = 2 / (p + 1);
+  let prev = null;
+  for (let i = 0; i < arr.length; i++) {
+    if (i < p - 1) continue;
+    if (prev == null) {
+      let s = 0; for (let j = i - p + 1; j <= i; j++) s += arr[j];
+      prev = s / p;
+    } else {
+      prev = arr[i] * k + prev * (1 - k);
+    }
+    out[i] = prev;
+  }
+  return out;
+}
+function BollingerBands(arr, p, k) {
+  const sma = SMA(arr, p);
+  const upper = new Array(arr.length).fill(null);
+  const lower = new Array(arr.length).fill(null);
+  for (let i = p - 1; i < arr.length; i++) {
+    let sumSq = 0;
+    for (let j = i - p + 1; j <= i; j++) sumSq += (arr[j] - sma[i]) ** 2;
+    const sd = Math.sqrt(sumSq / p);
+    upper[i] = sma[i] + k * sd;
+    lower[i] = sma[i] - k * sd;
+  }
+  return { upper, middle: sma, lower };
+}
+function RSI(arr, p) {
+  const out = new Array(arr.length).fill(null);
+  if (arr.length <= p) return out;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= p; i++) {
+    const d = arr[i] - arr[i - 1];
+    if (d >= 0) gains += d; else losses -= d;
+  }
+  let avgG = gains / p, avgL = losses / p;
+  out[p] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
+  for (let i = p + 1; i < arr.length; i++) {
+    const d = arr[i] - arr[i - 1];
+    const g = d > 0 ? d : 0, l = d < 0 ? -d : 0;
+    avgG = (avgG * (p - 1) + g) / p;
+    avgL = (avgL * (p - 1) + l) / p;
+    out[i] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
+  }
+  return out;
+}
+function MACD(arr, fast, slow, sig) {
+  const e1 = EMA(arr, fast);
+  const e2 = EMA(arr, slow);
+  const macd = arr.map((_, i) => (e1[i] != null && e2[i] != null) ? e1[i] - e2[i] : null);
+  const macdValid = macd.filter(v => v != null);
+  const sigEma = EMA(macdValid, sig);
+  const signal = new Array(arr.length).fill(null);
+  let validIdx = 0;
+  for (let i = 0; i < arr.length; i++) {
+    if (macd[i] != null) { signal[i] = sigEma[validIdx]; validIdx++; }
+  }
+  const hist = arr.map((_, i) => (macd[i] != null && signal[i] != null) ? macd[i] - signal[i] : null);
+  return { macd, signal, hist };
+}
+
+// ========== SUMMARY (財務拡張) ==========
 async function loadSummary() {
   if (!state.symbol) return;
   try {
     const data = await fetch(`/api/summary?symbol=${encodeURIComponent(state.symbol)}`).then(r => r.json());
-    // ROE
-    const roe = data?.financialData?.returnOnEquity?.raw;
-    state.summaryROE = roe != null ? roe * 100 : null;
-    if (state.summaryROE != null) {
-      const sc = scoreLinear(state.summaryROE, 0, 20);
-      setScore("roe", sc, `${fmt(state.summaryROE,2)}%`);
-    } else setScore("roe", null, "--");
+    state.summary = data;
+    state.earningsAnnual = data?.incomeStatementHistory?.incomeStatementHistory || [];
+    state.cfAnnual = data?.cashflowStatementHistory?.cashflowStatements || [];
+    state.bsAnnual = data?.balanceSheetHistory?.balanceSheetStatements || [];
+    state.earningsTrend = data?.earningsTrend?.trend || [];
 
-    // earnings
-    state.earnings = data?.incomeStatementHistory?.incomeStatementHistory || [];
+    // valuation 再計算（ROE/PEG/EVなど）
+    if (state.quote) renderValuation(state.quote);
     renderEarnings();
-
-    // profile
-    const a = data?.assetProfile || {};
-    $("#p-sector").textContent = a.industry || a.sector || "--";
-    $("#p-employees").textContent = a.fullTimeEmployees ? a.fullTimeEmployees.toLocaleString("ja-JP") + "人" : "--";
-    $("#p-address").textContent = [a.address1, a.city, a.country].filter(Boolean).join(" ") || "--";
-    $("#p-summary").textContent = a.longBusinessSummary || "--";
+    renderDividend();
+    renderAnalyst();
+    renderProfile();
+    renderFScore();
   } catch (e) { console.error("loadSummary", e); }
 }
 
 function renderEarnings() {
   const el = $("#earnings-bars");
-  if (!state.earnings || !state.earnings.length) { el.innerHTML = '<div class="sc-empty">データなし</div>'; return; }
-  const data = state.earnings.slice().reverse(); // 古い→新しい
+  const meta = $("#earn-meta");
+  if (!state.earningsAnnual?.length) { el.innerHTML = '<div class="sc-empty">データなし</div>'; meta.innerHTML = ""; return; }
 
-  let key, label;
-  if (state.earnMetric === "revenue") { key = "totalRevenue"; label = "売上"; }
-  else if (state.earnMetric === "profit") { key = "netIncome"; label = "純利益"; }
-  else { key = "epsActual"; label = "EPS"; }
+  const m = state.earnMetric;
+  let label, getter;
+  if (m === "revenue") { label="売上"; getter = (e,_,__) => e.totalRevenue?.raw; }
+  else if (m === "opIncome") { label="営業利益"; getter = (e,_,__) => e.operatingIncome?.raw ?? e.ebit?.raw; }
+  else if (m === "netIncome") { label="純利益"; getter = (e,_,__) => e.netIncome?.raw; }
+  else if (m === "eps") { label="EPS"; getter = (_,bs,__) => null; /* incomeにはEPS無し、後で個別 */ }
+  else if (m === "opcf") { label="営業CF"; getter = (_,_,cf) => cf?.totalCashFromOperatingActivities?.raw; }
+  else if (m === "fcf") { label="FCF"; getter = (_,_,cf) => {
+      const op = cf?.totalCashFromOperatingActivities?.raw;
+      const cap = cf?.capitalExpenditures?.raw;
+      return (op != null && cap != null) ? op + cap : null; // capExは負値
+    };
+  }
 
-  // EPSは別経路（earnings.financialsChart）。incomeStatementには無いのでnetIncome/sharesOutstanding等で代用は省略、ここでは純利益のみ
-  if (state.earnMetric === "eps") key = "netIncome"; // フォールバック
+  // 年度マッチ
+  const data = state.earningsAnnual.slice().reverse(); // 古→新
+  const cfRev = (state.cfAnnual||[]).slice().reverse();
+  const bsRev = (state.bsAnnual||[]).slice().reverse();
 
-  const vals = data.map(d => ({
-    year: d.endDate?.fmt?.slice(0,4) || "--",
-    val: d[key]?.raw ?? null,
+  const vals = data.map((e, i) => ({
+    year: e.endDate?.fmt?.slice(0,4) || "--",
+    val: getter(e, bsRev[i], cfRev[i]),
   })).filter(v => v.val != null);
 
-  if (!vals.length) { el.innerHTML = '<div class="sc-empty">データなし</div>'; return; }
+  // EPSは earnings.financialsChart.yearly から
+  if (m === "eps") {
+    const yr = state.summary?.earnings?.financialsChart?.yearly || [];
+    vals.length = 0;
+    yr.forEach(y => { if (y.earnings?.raw != null && y.revenue?.raw) {
+      // EPS = 純利益/発行済株式 ≒ 提供データなし、代用としてearningsをepsとする
+    }});
+    // フォールバック：earningsHistoryから（四半期EPS年合計近似）
+    const eh = state.summary?.earningsHistory?.history || [];
+    const byYr = {};
+    eh.forEach(h => { const yr = h.quarter?.fmt?.slice(0,4); if (!yr) return; byYr[yr] = (byYr[yr]||0) + (h.epsActual?.raw||0); });
+    Object.entries(byYr).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([yr,v])=>{
+      if (v) vals.push({ year: yr, val: v });
+    });
+  }
+
+  if (!vals.length) { el.innerHTML = '<div class="sc-empty">データなし</div>'; meta.innerHTML=""; return; }
   const max = Math.max(...vals.map(v => Math.abs(v.val)));
   el.innerHTML = vals.map(v => {
     const h = Math.max(2, Math.round(Math.abs(v.val)/max*100));
@@ -394,6 +628,227 @@ function renderEarnings() {
         <div class="bar-label">${v.year}</div>
       </div>`;
   }).join("");
+
+  // 成長率
+  const yoy = vals.length >= 2 && vals[vals.length-2].val ? (vals[vals.length-1].val / vals[vals.length-2].val - 1) * 100 : null;
+  let cagr = null;
+  if (vals.length >= 4 && vals[0].val && vals[vals.length-1].val && vals[0].val > 0) {
+    const n = vals.length - 1;
+    cagr = (Math.pow(vals[vals.length-1].val / vals[0].val, 1/n) - 1) * 100;
+  }
+  const yoyTxt = yoy != null ? `<span class="${yoy>=0?'pos':'neg'}">${yoy>=0?'+':''}${fmt(yoy,1)}%</span>` : "--";
+  const cagrTxt = cagr != null ? `<span class="${cagr>=0?'pos':'neg'}">${cagr>=0?'+':''}${fmt(cagr,1)}%</span>` : "--";
+  meta.innerHTML = `<strong>${label}</strong> ｜ 前年比(YoY): ${yoyTxt} ｜ 過去${vals.length-1}年CAGR: ${cagrTxt}`;
+}
+
+// ========== DIVIDEND ==========
+function renderDividend() {
+  const sd = state.summary?.summaryDetail || {};
+  const ks = state.summary?.defaultKeyStatistics || {};
+  const yld = sd.dividendYield?.raw ?? sd.trailingAnnualDividendYield?.raw;
+  const rate = sd.dividendRate?.raw ?? sd.trailingAnnualDividendRate?.raw;
+  const payout = sd.payoutRatio?.raw;
+  const fiveY = sd.fiveYearAvgDividendYield?.raw;
+  const exDate = sd.exDividendDate?.fmt;
+
+  $("#d-yield").textContent = yld != null ? `${fmt(yld*100,2)}%` : "--";
+  $("#d-rate").textContent = rate != null ? `${fmt(rate,0)}円` : "--";
+  $("#d-payout").textContent = payout != null ? `${fmt(payout*100,1)}%` : "--";
+  $("#d-5y").textContent = fiveY != null ? `${fmt(fiveY,2)}%` : "--";
+  $("#d-exdate").textContent = exDate || "--";
+
+  // 連続増配傾向：5年配当履歴がない場合は、5年平均と現在配当を比較
+  let streakTxt = "--";
+  if (yld != null && fiveY != null) {
+    const cur = yld*100;
+    if (cur > fiveY * 1.1) streakTxt = "📈 増配傾向（5年平均超え）";
+    else if (cur < fiveY * 0.9) streakTxt = "📉 減配傾向";
+    else streakTxt = "➡ ほぼ横ばい";
+  }
+  $("#d-streak").textContent = streakTxt;
+}
+
+// ========== ANALYST ==========
+function renderAnalyst() {
+  const fd = state.summary?.financialData || {};
+  const target = fd.targetMeanPrice?.raw;
+  const cur = state.quote?.regularMarketPrice;
+  const upside = (target && cur) ? (target/cur - 1) * 100 : null;
+  const reco = fd.recommendationMean?.raw;
+  const recoKey = fd.recommendationKey;
+  const count = fd.numberOfAnalystOpinions?.raw;
+
+  $("#a-target").textContent = target != null ? `${fmt(target,0)}円` : "--";
+  $("#a-upside").innerHTML = upside != null ? `<span class="${upside>=0?'up':'dn'}">${upside>=0?'+':''}${fmt(upside,1)}%</span>` : "--";
+  const recoMap = { strong_buy: "強い買い", buy: "買い", hold: "中立", sell: "売り", strong_sell: "強い売り" };
+  $("#a-reco").textContent = recoKey ? `${recoMap[recoKey]||recoKey} (${fmt(reco,2)})` : "--";
+  $("#a-count").textContent = count != null ? `${count}名` : "--";
+
+  // recommendationTrend からセグメントバー
+  const trend = state.summary?.recommendationTrend?.trend?.[0];
+  if (trend) {
+    const sb = trend.strongBuy||0, b = trend.buy||0, h = trend.hold||0, s = trend.sell||0, ss = trend.strongSell||0;
+    const total = sb+b+h+s+ss;
+    if (total > 0) {
+      const seg = (n,cls,label) => n>0 ? `<div class="reco-seg ${cls}" style="flex:${n}">${label}${n}</div>` : "";
+      $("#reco-bar").innerHTML = seg(sb,"reco-strongbuy","強買")+seg(b,"reco-buy","買")+seg(h,"reco-hold","中")+seg(s,"reco-sell","売")+seg(ss,"reco-strongsell","強売");
+    } else $("#reco-bar").innerHTML = "";
+  }
+
+  // 次回決算
+  const cal = state.summary?.calendarEvents?.earnings?.earningsDate;
+  if (cal && cal[0]?.fmt) $("#a-next").textContent = `次回決算: ${cal[0].fmt}`;
+  else $("#a-next").textContent = "次回決算: 未定";
+}
+
+// ========== PROFILE ==========
+function renderProfile() {
+  const a = state.summary?.assetProfile || {};
+  $("#p-sector").textContent = a.industryDisp || a.industry || a.sector || "--";
+  $("#p-employees").textContent = a.fullTimeEmployees ? a.fullTimeEmployees.toLocaleString("ja-JP") + "人" : "--";
+  $("#p-address").textContent = [a.address1, a.city, a.country].filter(Boolean).join(" ") || "--";
+  $("#p-summary").textContent = a.longBusinessSummary || "--";
+}
+
+// ========== F-SCORE (Piotroski 9項目) ==========
+function renderFScore() {
+  const items = computeFScore();
+  const el = $("#fscore-list");
+  el.innerHTML = items.map(it => {
+    const cls = it.pass === true ? "fs-pass" : it.pass === false ? "fs-fail" : "fs-na";
+    const mark = it.pass === true ? "✓ +1" : it.pass === false ? "✗ 0" : "—";
+    return `<div class="fs-item"><span>${it.label}</span><span class="${cls}">${mark}</span></div>`;
+  }).join("");
+  const total = items.filter(i => i.pass === true).length;
+  const valid = items.filter(i => i.pass != null).length;
+  let interp = "";
+  if (valid >= 6) {
+    if (total >= 7) interp = "🟢 高スコア（財務健全・改善傾向）";
+    else if (total >= 4) interp = "🟡 中位スコア";
+    else interp = "🔴 低スコア（財務に注意点あり）";
+  } else interp = "（データ不足、参考値）";
+  $("#fscore-total").innerHTML = `合計 <span style="font-size:1.4rem;color:var(--primary)">${total}</span> / 9 ${interp}`;
+}
+
+function computeFScore() {
+  const inc = state.earningsAnnual || [];
+  const cf = state.cfAnnual || [];
+  const bs = state.bsAnnual || [];
+  // 直近2期（[0]=最新, [1]=前期）
+  const i0=inc[0], i1=inc[1], c0=cf[0], c1=cf[1], b0=bs[0], b1=bs[1];
+
+  const get = (o,k) => o?.[k]?.raw;
+  const safeDiv = (a,b) => (a!=null && b) ? a/b : null;
+
+  const items = [];
+
+  // 1. 当期純利益 > 0
+  const ni0 = get(i0,"netIncome");
+  items.push({ label: "①当期純利益 > 0", pass: ni0 != null ? ni0 > 0 : null });
+
+  // 2. 営業CF > 0
+  const ocf0 = get(c0,"totalCashFromOperatingActivities");
+  items.push({ label: "②営業CF > 0", pass: ocf0 != null ? ocf0 > 0 : null });
+
+  // 3. ROA改善（当期ROA > 前期ROA）
+  const a0 = get(b0,"totalAssets"), a1 = get(b1,"totalAssets");
+  const ni1 = get(i1,"netIncome");
+  const roa0 = safeDiv(ni0, a0), roa1 = safeDiv(ni1, a1);
+  items.push({ label: "③ROA前年比 改善", pass: (roa0!=null && roa1!=null) ? roa0 > roa1 : null });
+
+  // 4. 営業CF > 当期純利益（質の高い利益）
+  items.push({ label: "④営業CF > 純利益", pass: (ocf0!=null && ni0!=null) ? ocf0 > ni0 : null });
+
+  // 5. 長期負債比率 低下
+  const ltd0 = get(b0,"longTermDebt"), ltd1 = get(b1,"longTermDebt");
+  const ld0 = safeDiv(ltd0, a0), ld1 = safeDiv(ltd1, a1);
+  items.push({ label: "⑤長期負債比率 低下", pass: (ld0!=null && ld1!=null) ? ld0 < ld1 : null });
+
+  // 6. 流動比率 改善
+  const ca0 = get(b0,"totalCurrentAssets"), ca1 = get(b1,"totalCurrentAssets");
+  const cl0 = get(b0,"totalCurrentLiabilities"), cl1 = get(b1,"totalCurrentLiabilities");
+  const cr0 = safeDiv(ca0, cl0), cr1 = safeDiv(ca1, cl1);
+  items.push({ label: "⑥流動比率 改善", pass: (cr0!=null && cr1!=null) ? cr0 > cr1 : null });
+
+  // 7. 株式希薄化なし（発行済株式数が増えていない）
+  const sh0 = get(b0,"commonStock"), sh1 = get(b1,"commonStock");
+  items.push({ label: "⑦株式希薄化なし", pass: (sh0!=null && sh1!=null) ? sh0 <= sh1 * 1.001 : null });
+
+  // 8. 売上総利益率 改善
+  const rev0 = get(i0,"totalRevenue"), rev1 = get(i1,"totalRevenue");
+  const gp0 = get(i0,"grossProfit"), gp1 = get(i1,"grossProfit");
+  const gm0 = safeDiv(gp0, rev0), gm1 = safeDiv(gp1, rev1);
+  items.push({ label: "⑧売上総利益率 改善", pass: (gm0!=null && gm1!=null) ? gm0 > gm1 : null });
+
+  // 9. 資産回転率 改善
+  const at0 = safeDiv(rev0, a0), at1 = safeDiv(rev1, a1);
+  items.push({ label: "⑨総資産回転率 改善", pass: (at0!=null && at1!=null) ? at0 > at1 : null });
+
+  return items;
+}
+
+// ========== SIMULATOR ==========
+function renderSimulator() {
+  const buy = parseFloat($("#sim-price").value);
+  const shares = parseFloat($("#sim-shares").value) || 100;
+  const cur = state.quote?.regularMarketPrice;
+  const yld = state.summary?.summaryDetail?.dividendYield?.raw;
+  const rate = state.summary?.summaryDetail?.dividendRate?.raw;
+  const el = $("#sim-result");
+  if (!buy || !cur) { el.textContent = "取得単価を入力してください"; return; }
+
+  const cost = buy * shares;
+  const value = cur * shares;
+  const pl = value - cost;
+  const plPct = (cur/buy - 1) * 100;
+  const annDiv = (rate || (yld ? yld * cur : 0)) * shares;
+  const yieldOnCost = rate ? (rate / buy) * 100 : (yld ? yld * cur / buy * 100 : null);
+
+  const cls = pl >= 0 ? "up" : "dn";
+  el.innerHTML = `
+    <div>取得：${fmt(cost,0)}円 → 評価：<strong>${fmt(value,0)}円</strong></div>
+    <span class="big ${cls}">${pl>=0?'+':''}${fmt(pl,0)}円（${pl>=0?'+':''}${fmt(plPct,2)}%）</span>
+    <div>年間配当（概算）：<strong>${fmt(annDiv,0)}円</strong></div>
+    <div>取得時利回り（YoC）：<strong>${yieldOnCost!=null?fmt(yieldOnCost,2)+'%':'--'}</strong></div>
+  `;
+}
+
+// ========== PEERS ==========
+async function loadPeers() {
+  if (!state.symbol) return;
+  try {
+    const r = await fetch(`/api/peers?symbol=${encodeURIComponent(state.symbol)}`).then(r => r.json());
+    const peers = (r.peers || []).slice(0, 5);
+    const all = [state.symbol, ...peers.filter(p => p !== state.symbol)];
+    if (!all.length) { renderPeers([]); return; }
+    const q = await fetch(`/api/quote?symbols=${encodeURIComponent(all.join(","))}`).then(r => r.json());
+    renderPeers(q?.quoteResponse?.result || []);
+  } catch (e) { console.error("loadPeers", e); }
+}
+
+function renderPeers(quotes) {
+  const tb = $("#peers-table tbody");
+  if (!quotes.length) { tb.innerHTML = '<tr><td colspan="8" class="sc-empty">同業他社データ取得不可</td></tr>'; return; }
+  tb.innerHTML = quotes.map(q => {
+    const isSelf = q.symbol === state.symbol;
+    const chgPct = q.regularMarketChangePercent ?? 0;
+    const yld = q.trailingAnnualDividendYield != null ? q.trailingAnnualDividendYield * 100 : (q.dividendYield ?? null);
+    return `
+      <tr class="${isSelf?'self':''}" data-symbol="${q.symbol}">
+        <td><span class="ticker-cell">${q.symbol.replace(".T","")}</span> ${q.shortName||q.longName||""}</td>
+        <td>${fmt(q.regularMarketPrice,0)}</td>
+        <td class="${chgPct>=0?'up':'dn'}">${chgPct>=0?'+':''}${fmt(chgPct,2)}%</td>
+        <td>${fmt(q.trailingPE,2)}</td>
+        <td>${fmt(q.priceToBook,2)}</td>
+        <td>${yld!=null?fmt(yld,2)+'%':'--'}</td>
+        <td>${fmtCap(q.marketCap)}</td>
+        <td>--</td>
+      </tr>`;
+  }).join("");
+  tb.querySelectorAll("tr").forEach(tr => {
+    if (tr.classList.contains("self")) return;
+    tr.addEventListener("click", () => selectSymbol(tr.dataset.symbol));
+  });
 }
 
 // ========== WATCHLIST ==========
@@ -401,20 +856,15 @@ function loadWatchlist() {
   try { return JSON.parse(localStorage.getItem("kabu_watchlist") || "[]"); }
   catch { return []; }
 }
-function saveWatchlist() {
-  localStorage.setItem("kabu_watchlist", JSON.stringify(state.watchlist));
-}
+function saveWatchlist() { localStorage.setItem("kabu_watchlist", JSON.stringify(state.watchlist)); }
 function addToWatchlist(symbol, name) {
   if (state.watchlist.some(w => w.symbol === symbol)) return;
   state.watchlist.push({ symbol, name });
-  saveWatchlist();
-  renderWatchlist();
-  refreshWatchlistAll();
+  saveWatchlist(); renderWatchlist(); refreshWatchlistAll();
 }
 function removeFromWatchlist(symbol) {
   state.watchlist = state.watchlist.filter(w => w.symbol !== symbol);
-  saveWatchlist();
-  renderWatchlist();
+  saveWatchlist(); renderWatchlist();
 }
 function renderWatchlist() {
   const el = $("#watchlist");
@@ -435,8 +885,7 @@ function renderWatchlist() {
       selectSymbol(li.dataset.symbol);
     });
     li.querySelector(".w-del").addEventListener("click", (e) => {
-      e.stopPropagation();
-      removeFromWatchlist(li.dataset.symbol);
+      e.stopPropagation(); removeFromWatchlist(li.dataset.symbol);
     });
   });
   refreshWatchlistAll();
@@ -478,7 +927,9 @@ async function runScreener() {
   const perMax = parseFloat($("#sc-per").value) || null;
   const pbrMax = parseFloat($("#sc-pbr").value) || null;
   const yldMin = parseFloat($("#sc-yield").value) || null;
-  const mcapMin = parseFloat($("#sc-mcap").value) || null; // 億円
+  const mcapMin = parseFloat($("#sc-mcap").value) || null;
+  const roeMin = parseFloat($("#sc-roe").value) || null;
+  const eqMin = parseFloat($("#sc-eq").value) || null;
   const list = state.popular.groups[group] || [];
   const result = $("#sc-result");
   result.innerHTML = '<div class="sc-loading">取得中…<span class="loading"></span></div>';
@@ -486,7 +937,23 @@ async function runScreener() {
   try {
     const symbols = list.map(it => `${it.code}.T`).join(",");
     const r = await fetch(`/api/quote?symbols=${encodeURIComponent(symbols)}`).then(r => r.json());
-    const quotes = r?.quoteResponse?.result || [];
+    let quotes = r?.quoteResponse?.result || [];
+
+    // ROE/自己資本要なら個別summary取得
+    const needSummary = roeMin != null || eqMin != null;
+    if (needSummary) {
+      const ext = await Promise.all(quotes.map(async q => {
+        try {
+          const s = await fetch(`/api/summary?symbol=${encodeURIComponent(q.symbol)}`).then(r=>r.json());
+          const roe = s?.financialData?.returnOnEquity?.raw;
+          const bs = s?.balanceSheetHistory?.balanceSheetStatements?.[0];
+          const eqR = (bs?.totalStockholderEquity?.raw && bs?.totalAssets?.raw) ? bs.totalStockholderEquity.raw/bs.totalAssets.raw*100 : null;
+          return { ...q, _roe: roe!=null?roe*100:null, _eqRatio: eqR };
+        } catch { return q; }
+      }));
+      quotes = ext;
+    }
+
     const filtered = quotes.filter(q => {
       const per = q.trailingPE;
       const pbr = q.priceToBook;
@@ -496,6 +963,8 @@ async function runScreener() {
       if (pbrMax != null && (pbr == null || pbr > pbrMax)) return false;
       if (yldMin != null && (yld == null || yld < yldMin)) return false;
       if (mcapMin != null && (mcapOku == null || mcapOku < mcapMin)) return false;
+      if (roeMin != null && (q._roe == null || q._roe < roeMin)) return false;
+      if (eqMin != null && (q._eqRatio == null || q._eqRatio < eqMin)) return false;
       return true;
     }).sort((a,b)=>(b.marketCap||0)-(a.marketCap||0));
 
@@ -518,6 +987,7 @@ function fmt(v, d=2) {
   if (v == null || isNaN(v)) return "--";
   return Number(v).toLocaleString("ja-JP", { minimumFractionDigits: d, maximumFractionDigits: d });
 }
+function pct(v) { return v == null ? "--" : `${fmt(v*100,2)}%`; }
 function fmtVol(v) {
   if (v == null) return "--";
   if (v >= 1e8) return (v/1e8).toFixed(2)+"億";

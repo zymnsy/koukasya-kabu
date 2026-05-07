@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>光菓舎-Kabu｜日本株 統合分析</title>
-<meta name="description" content="株探・スカウター・TradingView・四季報のいいとこ取り。1画面で銘柄検索・チャート・割安判定・スクリーナー・ウォッチリストまで。">
+<title>光菓舎-Kabu｜日本株 統合分析（高精度版）</title>
+<meta name="description" content="株探・スカウター・TradingViewのいいとこ取り。テクニカル6指標・10年ファンダ・配当履歴・アナリスト目標・F-Score判定・損益シミュレータまで1画面に。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E📈%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="./css/style.css">
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -16,6 +16,7 @@
     <span class="logo">📈</span>
     <h1>光菓舎-Kabu</h1>
     <span class="tag" id="market-tag">JPX</span>
+    <span class="tag" style="background:#3a2864;color:#d4b8ff;border-color:#503680">高精度版</span>
   </div>
   <div class="search-wrap">
     <input type="search" id="search" placeholder="銘柄コード or 社名（例: 7203 / トヨタ）" autocomplete="off">
@@ -70,6 +71,14 @@
         <div class="kpi"><label>PER</label><span id="t-per">--</span></div>
         <div class="kpi"><label>PBR</label><span id="t-pbr">--</span></div>
         <div class="kpi"><label>配当利回り</label><span id="t-yield">--</span></div>
+        <div class="kpi"><label>EPS</label><span id="t-eps">--</span></div>
+        <div class="kpi"><label>BPS</label><span id="t-bps">--</span></div>
+        <div class="kpi"><label>ROE</label><span id="t-roe">--</span></div>
+        <div class="kpi"><label>ROA</label><span id="t-roa">--</span></div>
+        <div class="kpi"><label>自己資本比率</label><span id="t-equity">--</span></div>
+        <div class="kpi"><label>EV/EBITDA</label><span id="t-evebitda">--</span></div>
+        <div class="kpi"><label>52週高値</label><span id="t-52h">--</span></div>
+        <div class="kpi"><label>52週安値</label><span id="t-52l">--</span></div>
       </div>
     </div>
 
@@ -78,7 +87,7 @@
       <div class="chart-tabs">
         <div class="range-tabs">
           <button class="range-btn" data-range="5d" data-interval="15m">5日</button>
-          <button class="range-btn active" data-range="1mo" data-interval="1d">1ヶ月</button>
+          <button class="range-btn active" data-range="3mo" data-interval="1d">3ヶ月</button>
           <button class="range-btn" data-range="6mo" data-interval="1d">6ヶ月</button>
           <button class="range-btn" data-range="1y" data-interval="1d">1年</button>
           <button class="range-btn" data-range="5y" data-interval="1wk">5年</button>
@@ -90,7 +99,20 @@
           <button class="ctype-btn" data-ctype="area">エリア</button>
         </div>
       </div>
+      <div class="indicator-row">
+        <span class="ind-label">指標:</span>
+        <label><input type="checkbox" class="ind-toggle" data-ind="sma5" checked> SMA5</label>
+        <label><input type="checkbox" class="ind-toggle" data-ind="sma25" checked> SMA25</label>
+        <label><input type="checkbox" class="ind-toggle" data-ind="sma75"> SMA75</label>
+        <label><input type="checkbox" class="ind-toggle" data-ind="sma200"> SMA200</label>
+        <label><input type="checkbox" class="ind-toggle" data-ind="bb"> ボリンジャー</label>
+        <label><input type="checkbox" class="ind-toggle" data-ind="vol" checked> 出来高</label>
+        <label><input type="checkbox" class="ind-toggle" data-ind="rsi"> RSI(14)</label>
+        <label><input type="checkbox" class="ind-toggle" data-ind="macd"> MACD</label>
+      </div>
       <div id="chart" class="chart-area"></div>
+      <div id="chart-rsi" class="chart-sub hidden"></div>
+      <div id="chart-macd" class="chart-sub hidden"></div>
     </div>
 
     <!-- valuation card -->
@@ -98,12 +120,12 @@
       <h3>🎯 割安/割高 ひと目スコア</h3>
       <div class="score-grid">
         <div class="score-cell">
-          <div class="score-label">PER評価</div>
+          <div class="score-label">PER</div>
           <div class="score-bar"><div class="score-fill" id="score-per"></div></div>
           <div class="score-detail" id="score-per-text">--</div>
         </div>
         <div class="score-cell">
-          <div class="score-label">PBR評価</div>
+          <div class="score-label">PBR</div>
           <div class="score-bar"><div class="score-fill" id="score-pbr"></div></div>
           <div class="score-detail" id="score-pbr-text">--</div>
         </div>
@@ -117,19 +139,104 @@
           <div class="score-bar"><div class="score-fill" id="score-roe"></div></div>
           <div class="score-detail" id="score-roe-text">--</div>
         </div>
+        <div class="score-cell">
+          <div class="score-label">PEG</div>
+          <div class="score-bar"><div class="score-fill" id="score-peg"></div></div>
+          <div class="score-detail" id="score-peg-text">--</div>
+        </div>
+        <div class="score-cell">
+          <div class="score-label">グレアム指数</div>
+          <div class="score-bar"><div class="score-fill" id="score-graham"></div></div>
+          <div class="score-detail" id="score-graham-text">--</div>
+        </div>
       </div>
       <div class="verdict" id="verdict">--</div>
     </div>
 
     <!-- earnings card -->
     <div class="earnings card">
-      <h3>📊 業績推移（年次）</h3>
+      <h3>📊 業績推移（年次・最大10年）</h3>
       <div class="earnings-toolbar">
         <button class="earn-tab active" data-metric="revenue">売上</button>
-        <button class="earn-tab" data-metric="profit">純利益</button>
+        <button class="earn-tab" data-metric="opIncome">営業利益</button>
+        <button class="earn-tab" data-metric="netIncome">純利益</button>
         <button class="earn-tab" data-metric="eps">EPS</button>
+        <button class="earn-tab" data-metric="opcf">営業CF</button>
+        <button class="earn-tab" data-metric="fcf">FCF</button>
       </div>
       <div id="earnings-bars" class="bars"></div>
+      <div class="earn-meta" id="earn-meta"></div>
+    </div>
+
+    <!-- two-col row: dividend + analyst -->
+    <div class="two-col">
+      <div class="card">
+        <h3>💴 配当の精度分析</h3>
+        <div class="div-grid">
+          <div class="div-cell"><label>配当利回り</label><span id="d-yield">--</span></div>
+          <div class="div-cell"><label>1株配当</label><span id="d-rate">--</span></div>
+          <div class="div-cell"><label>配当性向</label><span id="d-payout">--</span></div>
+          <div class="div-cell"><label>5年平均利回り</label><span id="d-5y">--</span></div>
+          <div class="div-cell"><label>配当落ち日</label><span id="d-exdate">--</span></div>
+          <div class="div-cell"><label>連続増配傾向</label><span id="d-streak">--</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>🎓 アナリスト評価</h3>
+        <div class="anal-grid">
+          <div class="anal-cell"><label>目標株価（平均）</label><span id="a-target">--</span></div>
+          <div class="anal-cell"><label>上昇余地</label><span id="a-upside">--</span></div>
+          <div class="anal-cell"><label>推奨度</label><span id="a-reco">--</span></div>
+          <div class="anal-cell"><label>カバー数</label><span id="a-count">--</span></div>
+        </div>
+        <div class="reco-bar" id="reco-bar"></div>
+        <div class="next-event" id="a-next">次回決算: --</div>
+      </div>
+    </div>
+
+    <!-- F-score + simulator -->
+    <div class="two-col">
+      <div class="card">
+        <h3>🧪 ピオトロスキー F-Score（9項目）</h3>
+        <div id="fscore-list" class="fscore-list"></div>
+        <div class="fscore-total" id="fscore-total">--</div>
+      </div>
+
+      <div class="card">
+        <h3>💼 損益シミュレーター</h3>
+        <div class="sim-form">
+          <label>取得単価
+            <input type="number" id="sim-price" placeholder="例: 2500">
+          </label>
+          <label>株数
+            <input type="number" id="sim-shares" placeholder="例: 100" value="100">
+          </label>
+        </div>
+        <div class="sim-result" id="sim-result">取得単価を入力してください</div>
+      </div>
+    </div>
+
+    <!-- peers comparison -->
+    <div class="card">
+      <h3>🆚 同業他社 並列比較</h3>
+      <div class="peers-table-wrap">
+        <table class="peers-table" id="peers-table">
+          <thead>
+            <tr>
+              <th>銘柄</th>
+              <th>株価</th>
+              <th>前日比</th>
+              <th>PER</th>
+              <th>PBR</th>
+              <th>配当%</th>
+              <th>時価総額</th>
+              <th>ROE</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
 
     <!-- profile -->
@@ -165,6 +272,10 @@
       <div class="row2">
         <label>配当% ≧ <input type="number" id="sc-yield" placeholder="例: 3" step="0.1"></label>
         <label>時価総額(億)≧ <input type="number" id="sc-mcap" placeholder="例: 1000"></label>
+      </div>
+      <div class="row2">
+        <label>ROE% ≧ <input type="number" id="sc-roe" placeholder="例: 10" step="0.1"></label>
+        <label>自己資本%≧ <input type="number" id="sc-eq" placeholder="例: 40" step="1"></label>
       </div>
       <button id="sc-run" class="btn-primary">スクリーニング実行</button>
     </div>

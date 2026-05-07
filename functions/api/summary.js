@@ -1,4 +1,4 @@
-// 銘柄サマリ（quoteSummary）crumb認証版
+// 銘柄サマリ（quoteSummary）crumb認証版・高精度モジュール盛
 // /api/summary?symbol=7203.T
 
 import { getYahooSession, YAHOO_UA } from "../_lib/yahoo.js";
@@ -9,7 +9,7 @@ export async function onRequest(context) {
   if (!symbol) return json({ error: "symbol required" }, 400);
 
   const session = await getYahooSession();
-  if (!session) return json({}, 200, 60); // 静かに空返し
+  if (!session) return json({}, 200, 60);
 
   const modules = [
     "price",
@@ -17,7 +17,18 @@ export async function onRequest(context) {
     "defaultKeyStatistics",
     "financialData",
     "earnings",
+    "earningsHistory",
+    "earningsTrend",
     "incomeStatementHistory",
+    "incomeStatementHistoryQuarterly",
+    "balanceSheetHistory",
+    "balanceSheetHistoryQuarterly",
+    "cashflowStatementHistory",
+    "cashflowStatementHistoryQuarterly",
+    "calendarEvents",
+    "recommendationTrend",
+    "upgradeDowngradeHistory",
+    "majorHoldersBreakdown",
     "assetProfile",
   ].join(",");
 
